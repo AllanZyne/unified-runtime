@@ -17,7 +17,7 @@
 
 #include <map>
 #include <memory>
-#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace ur_sanitizer_layer {
@@ -95,6 +95,12 @@ struct LaunchInfo {
     ~LaunchInfo();
 };
 
+struct MemBuffer {
+    ur_mem_handle_t Buffer;
+    size_t Size;
+    size_t RZSize;
+};
+
 class SanitizerInterceptor {
   public:
     SanitizerInterceptor();
@@ -123,12 +129,32 @@ class SanitizerInterceptor {
     ur_result_t eraseQueue(ur_context_handle_t Context,
                             ur_queue_handle_t Queue);
 
+    void insertBuffer(ur_mem_handle_t Buffer) {
+        std::scoped_lock<ur_shared_mutex> Guard(m_MemBufferSetMutex);
+        assert(m_MemBufferSet.find(Buffer) == m_MemBufferSet.end());
+        m_MemBufferSet.emplace(Buffer);
+    }
+
+    void eraseBuffer(ur_mem_handle_t Buffer) {
+        std::scoped_lock<ur_shared_mutex> Guard(m_MemBufferSetMutex);
+        assert(m_MemBufferSet.find(Buffer) != m_MemBufferSet.end());
+        m_MemBufferSet.erase(Buffer);
+    }
+
+    MemBuffer *getBuffer(ur_mem_handle_t Buffer) {
+        std::shared_lock<ur_shared_mutex> Guard(m_MemBufferSetMutex);
+        if (m_MemBufferSet.count(Buffer)) {
+            return reinterpret_cast<MemBuffer *>(Buffer);
+        }
+        return nullptr;
+    }
+
   private:
     ur_result_t updateShadowMemory(ur_queue_handle_t Queue);
     ur_result_t enqueueAllocInfo(ur_context_handle_t Context,
                                  ur_device_handle_t Device,
                                  ur_queue_handle_t Queue,
-                                 std::shared_ptr<USMAllocInfo> &AlloccInfo,
+                                 std::shared_ptr<USMAllocInfo> &AllocInfo,
                                  ur_event_handle_t &LastEvent);
 
     /// Initialize Global Variables & Kernel Name at first Launch
@@ -155,6 +181,9 @@ class SanitizerInterceptor {
     std::unordered_map<ur_context_handle_t, std::shared_ptr<ContextInfo>>
         m_ContextMap;
     ur_shared_mutex m_ContextMapMutex;
+
+    std::unordered_set<ur_mem_handle_t> m_MemBufferSet;
+    ur_shared_mutex m_MemBufferSetMutex;
 
     bool m_IsInASanContext;
 };
