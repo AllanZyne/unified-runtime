@@ -149,6 +149,14 @@ class SanitizerInterceptor {
         return nullptr;
     }
 
+    ur_mem_handle_t getRealBuffer(ur_mem_handle_t Buffer) {
+        std::shared_lock<ur_shared_mutex> Guard(m_MemBufferSetMutex);
+        if (m_MemBufferSet.count(Buffer)) {
+            return reinterpret_cast<MemBuffer *>(Buffer)->Buffer;
+        }
+        return Buffer;
+    }
+
   private:
     ur_result_t updateShadowMemory(ur_queue_handle_t Queue);
     ur_result_t enqueueAllocInfo(ur_context_handle_t Context,
