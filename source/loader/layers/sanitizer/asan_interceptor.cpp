@@ -49,33 +49,6 @@ uptr MemToShadow_PVC(uptr USM_SHADOW_BASE, uptr UPtr) {
     }
 }
 
-ur_context_handle_t getContext(ur_queue_handle_t Queue) {
-    ur_context_handle_t Context;
-    [[maybe_unused]] auto Result = context.urDdiTable.Queue.pfnGetInfo(
-        Queue, UR_QUEUE_INFO_CONTEXT, sizeof(ur_context_handle_t), &Context,
-        nullptr);
-    assert(Result == UR_RESULT_SUCCESS);
-    return Context;
-}
-
-ur_device_handle_t getDevice(ur_queue_handle_t Queue) {
-    ur_device_handle_t Device;
-    [[maybe_unused]] auto Result = context.urDdiTable.Queue.pfnGetInfo(
-        Queue, UR_QUEUE_INFO_DEVICE, sizeof(ur_device_handle_t), &Device,
-        nullptr);
-    assert(Result == UR_RESULT_SUCCESS);
-    return Device;
-}
-
-ur_program_handle_t getProgram(ur_kernel_handle_t Kernel) {
-    ur_program_handle_t Program;
-    [[maybe_unused]] auto Result = context.urDdiTable.Kernel.pfnGetInfo(
-        Kernel, UR_KERNEL_INFO_PROGRAM, sizeof(ur_program_handle_t), &Program,
-        nullptr);
-    assert(Result == UR_RESULT_SUCCESS);
-    return Program;
-}
-
 size_t getLocalMemorySize(ur_device_handle_t Device) {
     size_t LocalMemorySize;
     [[maybe_unused]] auto Result = context.urDdiTable.Device.pfnGetInfo(
@@ -100,256 +73,18 @@ std::string getKernelName(ur_kernel_handle_t Kernel) {
     return std::string(KernelNameBuf.data(), KernelNameSize - 1);
 }
 
-} // namespace
-
-SanitizerInterceptor::SanitizerInterceptor()
-    : m_IsInASanContext(IsInASanContext()) {}
-
-/// The memory chunk allocated from the underlying allocator looks like this:
-/// L L L L L L U U U U U U R R
-///   L -- left redzone words (0 or more bytes)
-///   U -- user memory.
-///   R -- right redzone (0 or more bytes)
-///
-/// ref: "compiler-rt/lib/asan/asan_allocator.cpp" Allocator::Allocate
-ur_result_t SanitizerInterceptor::allocateMemory(
-    ur_context_handle_t Context, ur_device_handle_t Device,
-    const ur_usm_desc_t *Properties, ur_usm_pool_handle_t Pool, size_t Size,
-    void **ResultPtr, USMMemoryType Type) {
-    auto Alignment = Properties->align;
-    assert(Alignment == 0 || IsPowerOfTwo(Alignment));
-
-    auto ContextInfo = getContextInfo(Context);
-    std::shared_ptr<DeviceInfo> DeviceInfo;
-    if (Device) {
-        DeviceInfo = ContextInfo->getDeviceInfo(Device);
-    }
-
-    if (Alignment == 0) {
-        Alignment =
-            DeviceInfo ? DeviceInfo->Alignment : ASAN_SHADOW_GRANULARITY;
-    }
-
-    // Copy from LLVM compiler-rt/lib/asan
-    uptr RZLog = ComputeRZLog(Size);
-    uptr RZSize = RZLog2Size(RZLog);
-    uptr RoundedSize = RoundUpTo(Size, Alignment);
-    uptr NeededSize = RoundedSize + RZSize * 2;
-
-    void *Allocated = nullptr;
-
-    if (Type == USMMemoryType::DEVICE) {
-        UR_CALL(context.urDdiTable.USM.pfnDeviceAlloc(
-            Context, Device, Properties, Pool, NeededSize, &Allocated));
-    } else if (Type == USMMemoryType::HOST) {
-        UR_CALL(context.urDdiTable.USM.pfnHostAlloc(Context, Properties, Pool,
-                                                    NeededSize, &Allocated));
-    } else if (Type == USMMemoryType::SHARE) {
-        UR_CALL(context.urDdiTable.USM.pfnSharedAlloc(
-            Context, Device, Properties, Pool, NeededSize, &Allocated));
-    } else {
-        context.logger.error("Unsupport memory type");
-        return UR_RESULT_ERROR_INVALID_ARGUMENT;
-    }
-
-    // Copy from LLVM compiler-rt/lib/asan
-    uptr AllocBegin = reinterpret_cast<uptr>(Allocated);
-    [[maybe_unused]] uptr AllocEnd = AllocBegin + NeededSize;
-    uptr UserBegin = AllocBegin + RZSize;
-    if (!IsAligned(UserBegin, Alignment)) {
-        UserBegin = RoundUpTo(UserBegin, Alignment);
-    }
-    uptr UserEnd = UserBegin + Size;
-    assert(UserEnd <= AllocEnd);
-
-    *ResultPtr = reinterpret_cast<void *>(UserBegin);
-
-    auto AllocInfo = std::make_shared<USMAllocInfo>(
-        USMAllocInfo{AllocBegin, UserBegin, UserEnd, NeededSize, Type});
-
-    // For updating shadow memory
-    if (DeviceInfo) { // device/shared USM
-        std::scoped_lock<ur_shared_mutex> Guard(DeviceInfo->Mutex);
-        DeviceInfo->AllocInfos.emplace_back(AllocInfo);
-    } else { // host USM's AllocInfo needs to insert into all devices
-        for (auto &pair : ContextInfo->DeviceMap) {
-            auto DeviceInfo = pair.second;
-            std::scoped_lock<ur_shared_mutex> Guard(DeviceInfo->Mutex);
-            DeviceInfo->AllocInfos.emplace_back(AllocInfo);
-        }
-    }
-
-    // For memory release
-    {
-        std::scoped_lock<ur_shared_mutex> Guard(ContextInfo->Mutex);
-        ContextInfo->AllocatedUSMMap[AllocBegin] = AllocInfo;
-    }
-
-    context.logger.info(
-        "AllocInfos(AllocBegin={},  User={}-{}, NeededSize={}, Type={})",
-        (void *)AllocBegin, (void *)UserBegin, (void *)UserEnd, NeededSize,
-        Type);
-
-    return UR_RESULT_SUCCESS;
-}
-
-ur_result_t SanitizerInterceptor::releaseMemory(ur_context_handle_t Context,
-                                                void *Ptr) {
-    auto ContextInfo = getContextInfo(Context);
-
-    std::shared_lock<ur_shared_mutex> Guard(ContextInfo->Mutex);
-
-    auto Addr = reinterpret_cast<uptr>(Ptr);
-    // Find the last element is not greater than key
-    auto AllocInfoIt = ContextInfo->AllocatedUSMMap.upper_bound((uptr)Addr);
-    if (AllocInfoIt == ContextInfo->AllocatedUSMMap.begin()) {
-        context.logger.error(
-            "Can't find release pointer({}) in AllocatedAddressesMap", Ptr);
-        return UR_RESULT_ERROR_INVALID_ARGUMENT;
-    }
-    --AllocInfoIt;
-    auto &AllocInfo = AllocInfoIt->second;
-
-    context.logger.debug("USMAllocInfo(AllocBegin={}, UserBegin={})",
-                         AllocInfo->AllocBegin, AllocInfo->UserBegin);
-
-    if (Addr != AllocInfo->UserBegin) {
-        context.logger.error("Releasing pointer({}) is not match to {}", Ptr,
-                             AllocInfo->UserBegin);
-        return UR_RESULT_ERROR_INVALID_ARGUMENT;
-    }
-
-    // TODO: Update shadow memory
-    return context.urDdiTable.USM.pfnFree(Context,
-                                          (void *)AllocInfo->AllocBegin);
-}
-
-ur_result_t SanitizerInterceptor::preLaunchKernel(ur_kernel_handle_t Kernel,
-                                                  ur_queue_handle_t Queue,
-                                                  ur_event_handle_t &Event,
-                                                  LaunchInfo &LaunchInfo,
-                                                  uint32_t numWorkgroup) {
-    UR_CALL(prepareLaunch(Queue, Kernel, LaunchInfo, numWorkgroup));
-
-    UR_CALL(updateShadowMemory(Queue));
-
-    // Return LastEvent in QueueInfo
-    auto Context = getContext(Queue);
-    auto ContextInfo = getContextInfo(Context);
-    auto QueueInfo = ContextInfo->getQueueInfo(Queue);
-
-    std::scoped_lock<ur_mutex> Guard(QueueInfo->Mutex);
-    Event = QueueInfo->LastEvent;
-    QueueInfo->LastEvent = nullptr;
-
-    return UR_RESULT_SUCCESS;
-}
-
-void SanitizerInterceptor::postLaunchKernel(ur_kernel_handle_t Kernel,
-                                            ur_queue_handle_t Queue,
-                                            ur_event_handle_t &Event,
-                                            LaunchInfo &LaunchInfo) {
-    auto Program = getProgram(Kernel);
-    ur_event_handle_t ReadEvent{};
-
-    // If kernel has defined SPIR_DeviceSanitizerReportMem, then we try to read it
-    // to host, but it's okay that it isn't defined
-    // FIXME: We must use block operation here
-    auto Result = context.urDdiTable.Enqueue.pfnDeviceGlobalVariableRead(
-        Queue, Program, kSPIR_DeviceSanitizerReportMem, true,
-        sizeof(LaunchInfo.SPIR_DeviceSanitizerReportMem), 0,
-        &LaunchInfo.SPIR_DeviceSanitizerReportMem, 1, &Event, &ReadEvent);
-
-    if (Result == UR_RESULT_SUCCESS) {
-        Event = ReadEvent;
-
-        auto AH = &LaunchInfo.SPIR_DeviceSanitizerReportMem;
-        if (!AH->Flag) {
-            return;
-        }
-
-        const char *File = AH->File[0] ? AH->File : "<unknown file>";
-        const char *Func = AH->Func[0] ? AH->Func : "<unknown func>";
-        auto KernelName = getKernelName(Kernel);
-
-        context.logger.always("\n====ERROR: DeviceSanitizer: {} on {}",
-                              DeviceSanitizerFormat(AH->ErrorType),
-                              DeviceSanitizerFormat(AH->MemoryType));
-        context.logger.always(
-            "{} of size {} at kernel <{}> LID({}, {}, {}) GID({}, "
-            "{}, {})",
-            AH->IsWrite ? "WRITE" : "READ", AH->AccessSize, KernelName.c_str(),
-            AH->LID0, AH->LID1, AH->LID2, AH->GID0, AH->GID1, AH->GID2);
-        context.logger.always("  #0 {} {}:{}", Func, File, AH->Line);
-        if (!AH->IsRecover) {
-            exit(1);
-        }
-    }
-}
-
-ur_result_t SanitizerInterceptor::allocShadowMemory(
-    ur_context_handle_t Context, std::shared_ptr<DeviceInfo> &DeviceInfo) {
-    if (DeviceInfo->Type == DeviceType::CPU) {
-        if (!m_IsInASanContext) {
-            context.logger.error("Host AddressSanitizer needs to be enabled");
-            return UR_RESULT_ERROR_INVALID_CONTEXT;
-        }
-
-        // Based on "compiler-rt/lib/asan/asan_mapping.h"
-        // Typical shadow mapping on Linux/x86_64 with SHADOW_OFFSET == 0x00007fff8000:
-        DeviceInfo->ShadowOffset = 0x00007fff8000ULL;
-        DeviceInfo->ShadowOffsetEnd = 0x10007fff7fffULL;
-        // // Default Linux/i386 mapping on x86_64 machine:
-        // DeviceInfo->ShadowOffset = 0x20000000ULL;
-        // DeviceInfo->ShadowOffsetEnd = 0x3fffffffULL;
-        // // Default Linux/i386 mapping on i386 machine
-        // DeviceInfo->ShadowOffset = 0x20000000ULL;
-        // DeviceInfo->ShadowOffsetEnd = 0x37ffffffULL;
-    } else if (DeviceInfo->Type == DeviceType::GPU_PVC) {
-        /// SHADOW MEMORY MAPPING (PVC, with CPU 47bit)
-        ///   Host/Shared USM : 0x0              ~ 0x0fff_ffff_ffff
-        ///   ?               : 0x1000_0000_0000 ~ 0x1fff_ffff_ffff
-        ///   Device USM      : 0x2000_0000_0000 ~ 0x3fff_ffff_ffff
-        constexpr size_t SHADOW_SIZE = 1ULL << 46;
-        // FIXME: Currently, level-zero doesn't create independent VAs for each contexts
-        static uptr ShadowOffset, ShadowOffsetEnd;
-
-        if (!ShadowOffset) {
-            // TODO: Protect Bad Zone
-            auto Result = context.urDdiTable.VirtualMem.pfnReserve(
-                Context, nullptr, SHADOW_SIZE, (void **)&ShadowOffset);
-            if (Result != UR_RESULT_SUCCESS) {
-                context.logger.error(
-                    "Failed to allocate shadow memory on PVC: {}", Result);
-                return Result;
-            }
-            ShadowOffsetEnd = ShadowOffset + SHADOW_SIZE;
-        }
-
-        DeviceInfo->ShadowOffset = ShadowOffset;
-        DeviceInfo->ShadowOffsetEnd = ShadowOffsetEnd;
-    } else {
-        context.logger.error("Unsupport device type");
-        return UR_RESULT_ERROR_INVALID_ARGUMENT;
-    }
-    context.logger.info("ShadowMemory(Global): {} - {}",
-                        (void *)DeviceInfo->ShadowOffset,
-                        (void *)DeviceInfo->ShadowOffsetEnd);
-
-    return UR_RESULT_SUCCESS;
-}
-
-ur_result_t SanitizerInterceptor::enqueueMemSetShadow(
-    ur_context_handle_t Context, ur_device_handle_t Device,
-    ur_queue_handle_t Queue, uptr Ptr, uptr Size, u8 Value,
-    ur_event_handle_t DepEvent, ur_event_handle_t *OutEvent) {
+ur_result_t enqueueMemSetShadow(ur_queue_handle_t Queue, uptr Ptr, uptr Size,
+                                u8 Value, ur_event_handle_t DepEvent,
+                                ur_event_handle_t *OutEvent) {
 
     uint32_t NumEventsInWaitList = DepEvent ? 1 : 0;
     const ur_event_handle_t *EventsWaitList = DepEvent ? &DepEvent : nullptr;
     ur_event_handle_t InternalEvent{};
     ur_event_handle_t *Event = OutEvent ? OutEvent : &InternalEvent;
 
-    auto ContextInfo = getContextInfo(Context);
+    auto Context = getContext(Queue);
+    auto Device = getDevice(Queue);
+    auto ContextInfo = context.interceptor->getContextInfo(Context);
     auto DeviceInfo = ContextInfo->getDeviceInfo(Device);
 
     if (DeviceInfo->Type == DeviceType::CPU) {
@@ -462,79 +197,370 @@ ur_result_t SanitizerInterceptor::enqueueMemSetShadow(
 ///  - 1 <= k <= 7: Only the first k bytes is accessible
 ///
 /// ref: https://github.com/google/sanitizers/wiki/AddressSanitizerAlgorithm#mapping
-ur_result_t SanitizerInterceptor::enqueueAllocInfo(
-    ur_context_handle_t Context, ur_device_handle_t Device,
-    ur_queue_handle_t Queue, std::shared_ptr<USMAllocInfo> &AllocInfo,
-    ur_event_handle_t &LastEvent) {
+ur_result_t enqueueAllocInfo(ur_queue_handle_t Queue, const AllocInfo *AI,
+                             ur_event_handle_t &LastEvent) {
     // Init zero
-    UR_CALL(enqueueMemSetShadow(Context, Device, Queue, AllocInfo->AllocBegin,
-                                AllocInfo->AllocSize, 0, LastEvent,
-                                &LastEvent));
+    UR_CALL(enqueueMemSetShadow(Queue, AI->AllocBegin, AI->AllocSize, 0,
+                                LastEvent, &LastEvent));
 
-    uptr TailBegin = RoundUpTo(AllocInfo->UserEnd, ASAN_SHADOW_GRANULARITY);
-    uptr TailEnd = AllocInfo->AllocBegin + AllocInfo->AllocSize;
+    uptr TailBegin = RoundUpTo(AI->UserEnd, ASAN_SHADOW_GRANULARITY);
+    uptr TailEnd = AI->AllocBegin + AI->AllocSize;
 
     // User tail
-    if (TailBegin != AllocInfo->UserEnd) {
-        auto Value = AllocInfo->UserEnd -
-                     RoundDownTo(AllocInfo->UserEnd, ASAN_SHADOW_GRANULARITY);
-        UR_CALL(enqueueMemSetShadow(Context, Device, Queue, AllocInfo->UserEnd,
-                                    1, Value, LastEvent, &LastEvent));
+    if (TailBegin != AI->UserEnd) {
+        auto Value =
+            AI->UserEnd - RoundDownTo(AI->UserEnd, ASAN_SHADOW_GRANULARITY);
+        UR_CALL(enqueueMemSetShadow(Queue, AI->UserEnd, 1, Value, LastEvent,
+                                    &LastEvent));
     }
 
     int ShadowByte;
-    switch (AllocInfo->Type) {
-    case USMMemoryType::HOST:
+    switch (AI->Type) {
+    case AllocType::HOST_USM:
         ShadowByte = kUsmHostRedzoneMagic;
         break;
-    case USMMemoryType::DEVICE:
+    case AllocType::DEVICE_USM:
         ShadowByte = kUsmDeviceRedzoneMagic;
         break;
-    case USMMemoryType::SHARE:
+    case AllocType::SHARED_USM:
         ShadowByte = kUsmSharedRedzoneMagic;
         break;
-    case USMMemoryType::MEM_BUFFER:
+    case AllocType::MEM_BUFFER:
         ShadowByte = kMemBufferRedzoneMagic;
         break;
     default:
         ShadowByte = 0xff;
-        assert(false && "Unknow AllocInfo Type");
+        assert(false && "Unknow Alloc Type");
     }
 
     // Left red zone
-    UR_CALL(enqueueMemSetShadow(Context, Device, Queue, AllocInfo->AllocBegin,
-                                AllocInfo->UserBegin - AllocInfo->AllocBegin,
-                                ShadowByte, LastEvent, &LastEvent));
+    UR_CALL(enqueueMemSetShadow(Queue, AI->AllocBegin,
+                                AI->UserBegin - AI->AllocBegin, ShadowByte,
+                                LastEvent, &LastEvent));
 
     // Right red zone
-    UR_CALL(enqueueMemSetShadow(Context, Device, Queue, TailBegin,
-                                TailEnd - TailBegin, ShadowByte, LastEvent,
-                                &LastEvent));
+    UR_CALL(enqueueMemSetShadow(Queue, TailBegin, TailEnd - TailBegin,
+                                ShadowByte, LastEvent, &LastEvent));
 
     return UR_RESULT_SUCCESS;
 }
 
-ur_result_t SanitizerInterceptor::updateShadowMemory(ur_queue_handle_t Queue) {
+} // namespace
+
+ur_context_handle_t getContext(ur_kernel_handle_t Kernel) {
+    ur_context_handle_t Context;
+    [[maybe_unused]] auto Result = context.urDdiTable.Kernel.pfnGetInfo(
+        Kernel, UR_KERNEL_INFO_CONTEXT, sizeof(ur_context_handle_t), &Context,
+        nullptr);
+    assert(Result == UR_RESULT_SUCCESS);
+    return Context;
+}
+
+ur_context_handle_t getContext(ur_queue_handle_t Queue) {
+    ur_context_handle_t Context;
+    [[maybe_unused]] auto Result = context.urDdiTable.Queue.pfnGetInfo(
+        Queue, UR_QUEUE_INFO_CONTEXT, sizeof(ur_context_handle_t), &Context,
+        nullptr);
+    assert(Result == UR_RESULT_SUCCESS);
+    return Context;
+}
+
+ur_device_handle_t getDevice(ur_queue_handle_t Queue) {
+    ur_device_handle_t Device;
+    [[maybe_unused]] auto Result = context.urDdiTable.Queue.pfnGetInfo(
+        Queue, UR_QUEUE_INFO_DEVICE, sizeof(ur_device_handle_t), &Device,
+        nullptr);
+    assert(Result == UR_RESULT_SUCCESS);
+    return Device;
+}
+
+ur_program_handle_t getProgram(ur_kernel_handle_t Kernel) {
+    ur_program_handle_t Program;
+    [[maybe_unused]] auto Result = context.urDdiTable.Kernel.pfnGetInfo(
+        Kernel, UR_KERNEL_INFO_PROGRAM, sizeof(ur_program_handle_t), &Program,
+        nullptr);
+    assert(Result == UR_RESULT_SUCCESS);
+    return Program;
+}
+
+AllocInfo MemBuffer::getAllocInfo([[maybe_unused]] ur_device_handle_t Device) {
+    ur_native_handle_t Handle;
+    // FIXME: need to get specific native handle of buffer
+    context.urDdiTable.Mem.pfnGetNativeHandle(Buffer, &Handle);
+    uptr Allocated = reinterpret_cast<uptr>(Handle);
+    return AllocInfo{Allocated, Allocated, Allocated + Size - 1, SizeWithRZ,
+                     AllocType::MEM_BUFFER};
+}
+
+SanitizerInterceptor::SanitizerInterceptor()
+    : m_IsInASanContext(IsInASanContext()) {}
+
+/// The memory chunk allocated from the underlying allocator looks like this:
+/// L L L L L L U U U U U U R R
+///   L -- left redzone words (0 or more bytes)
+///   U -- user memory.
+///   R -- right redzone (0 or more bytes)
+///
+/// ref: "compiler-rt/lib/asan/asan_allocator.cpp" Allocator::Allocate
+ur_result_t SanitizerInterceptor::allocateMemory(
+    ur_context_handle_t Context, ur_device_handle_t Device,
+    const ur_usm_desc_t *Properties, ur_usm_pool_handle_t Pool, size_t Size,
+    void **ResultPtr, AllocType Type) {
+    auto Alignment = Properties->align;
+    assert(Alignment == 0 || IsPowerOfTwo(Alignment));
+
+    auto ContextInfo = getContextInfo(Context);
+    std::shared_ptr<DeviceInfo> DeviceInfo;
+    if (Device) {
+        DeviceInfo = ContextInfo->getDeviceInfo(Device);
+    }
+
+    if (Alignment == 0) {
+        Alignment =
+            DeviceInfo ? DeviceInfo->Alignment : ASAN_SHADOW_GRANULARITY;
+    }
+
+    // Copy from LLVM compiler-rt/lib/asan
+    uptr RZLog = ComputeRZLog(Size);
+    uptr RZSize = RZLog2Size(RZLog);
+    uptr RoundedSize = RoundUpTo(Size, Alignment);
+    uptr NeededSize = RoundedSize + RZSize * 2;
+
+    void *Allocated = nullptr;
+
+    if (Type == AllocType::DEVICE_USM) {
+        UR_CALL(context.urDdiTable.USM.pfnDeviceAlloc(
+            Context, Device, Properties, Pool, NeededSize, &Allocated));
+    } else if (Type == AllocType::HOST_USM) {
+        UR_CALL(context.urDdiTable.USM.pfnHostAlloc(Context, Properties, Pool,
+                                                    NeededSize, &Allocated));
+    } else if (Type == AllocType::SHARED_USM) {
+        UR_CALL(context.urDdiTable.USM.pfnSharedAlloc(
+            Context, Device, Properties, Pool, NeededSize, &Allocated));
+    } else {
+        context.logger.error("Unsupport memory type");
+        return UR_RESULT_ERROR_INVALID_ARGUMENT;
+    }
+
+    // Copy from LLVM compiler-rt/lib/asan
+    uptr AllocBegin = reinterpret_cast<uptr>(Allocated);
+    [[maybe_unused]] uptr AllocEnd = AllocBegin + NeededSize;
+    uptr UserBegin = AllocBegin + RZSize;
+    if (!IsAligned(UserBegin, Alignment)) {
+        UserBegin = RoundUpTo(UserBegin, Alignment);
+    }
+    uptr UserEnd = UserBegin + Size;
+    assert(UserEnd <= AllocEnd);
+
+    *ResultPtr = reinterpret_cast<void *>(UserBegin);
+
+    auto AI = std::make_shared<AllocInfo>(
+        AllocInfo{AllocBegin, UserBegin, UserEnd, NeededSize, Type});
+
+    // For updating shadow memory
+    if (DeviceInfo) { // device/shared USM
+        std::scoped_lock<ur_shared_mutex> Guard(DeviceInfo->Mutex);
+        DeviceInfo->AllocInfos.emplace_back(AI);
+    } else { // host USM's AllocInfo needs to insert into all devices
+        for (auto &Pair : ContextInfo->DeviceMap) {
+            auto DeviceInfo = Pair.second;
+            std::scoped_lock<ur_shared_mutex> Guard(DeviceInfo->Mutex);
+            DeviceInfo->AllocInfos.emplace_back(AI);
+        }
+    }
+
+    // For memory release
+    {
+        std::scoped_lock<ur_shared_mutex> Guard(ContextInfo->Mutex);
+        ContextInfo->AllocatedUSMMap[AllocBegin] = AI;
+    }
+
+    context.logger.info(
+        "AllocInfos(AllocBegin={},  User={}-{}, NeededSize={}, Type={})",
+        (void *)AllocBegin, (void *)UserBegin, (void *)UserEnd, NeededSize,
+        static_cast<int>(Type));
+
+    return UR_RESULT_SUCCESS;
+}
+
+ur_result_t SanitizerInterceptor::releaseMemory(ur_context_handle_t Context,
+                                                void *Ptr) {
+    auto ContextInfo = getContextInfo(Context);
+
+    std::shared_lock<ur_shared_mutex> Guard(ContextInfo->Mutex);
+
+    auto Addr = reinterpret_cast<uptr>(Ptr);
+    // Find the last element is not greater than key
+    auto AllocInfoIt = ContextInfo->AllocatedUSMMap.upper_bound((uptr)Addr);
+    if (AllocInfoIt == ContextInfo->AllocatedUSMMap.begin()) {
+        context.logger.error(
+            "Can't find release pointer({}) in AllocatedAddressesMap", Ptr);
+        return UR_RESULT_ERROR_INVALID_ARGUMENT;
+    }
+    --AllocInfoIt;
+    auto &AllocInfo = AllocInfoIt->second;
+
+    context.logger.debug("AllocInfo(AllocBegin={}, UserBegin={})",
+                         AllocInfo->AllocBegin, AllocInfo->UserBegin);
+
+    if (Addr != AllocInfo->UserBegin) {
+        context.logger.error("Releasing pointer({}) is not match to {}", Ptr,
+                             AllocInfo->UserBegin);
+        return UR_RESULT_ERROR_INVALID_ARGUMENT;
+    }
+
+    // TODO: Update shadow memory
+    return context.urDdiTable.USM.pfnFree(Context,
+                                          (void *)AllocInfo->AllocBegin);
+}
+
+ur_result_t SanitizerInterceptor::preLaunchKernel(ur_kernel_handle_t Kernel,
+                                                  ur_queue_handle_t Queue,
+                                                  ur_event_handle_t &Event,
+                                                  LaunchInfo &LaunchInfo,
+                                                  uint32_t numWorkgroup) {
+    UR_CALL(prepareLaunch(Queue, Kernel, LaunchInfo, numWorkgroup));
+
+    UR_CALL(updateShadowMemory(Kernel, Queue));
+
+    // Return LastEvent in QueueInfo
+    auto Context = getContext(Queue);
+    auto ContextInfo = getContextInfo(Context);
+    auto QueueInfo = ContextInfo->getQueueInfo(Queue);
+
+    std::scoped_lock<ur_mutex> Guard(QueueInfo->Mutex);
+    Event = QueueInfo->LastEvent;
+    QueueInfo->LastEvent = nullptr;
+
+    return UR_RESULT_SUCCESS;
+}
+
+void SanitizerInterceptor::postLaunchKernel(ur_kernel_handle_t Kernel,
+                                            ur_queue_handle_t Queue,
+                                            ur_event_handle_t &Event,
+                                            LaunchInfo &LaunchInfo) {
+    auto Program = getProgram(Kernel);
+    ur_event_handle_t ReadEvent{};
+
+    // If kernel has defined SPIR_DeviceSanitizerReportMem, then we try to read it
+    // to host, but it's okay that it isn't defined
+    // FIXME: We must use block operation here
+    auto Result = context.urDdiTable.Enqueue.pfnDeviceGlobalVariableRead(
+        Queue, Program, kSPIR_DeviceSanitizerReportMem, true,
+        sizeof(LaunchInfo.SPIR_DeviceSanitizerReportMem), 0,
+        &LaunchInfo.SPIR_DeviceSanitizerReportMem, 1, &Event, &ReadEvent);
+
+    if (Result == UR_RESULT_SUCCESS) {
+        Event = ReadEvent;
+
+        auto AH = &LaunchInfo.SPIR_DeviceSanitizerReportMem;
+        if (!AH->Flag) {
+            return;
+        }
+
+        const char *File = AH->File[0] ? AH->File : "<unknown file>";
+        const char *Func = AH->Func[0] ? AH->Func : "<unknown func>";
+        auto KernelName = getKernelName(Kernel);
+
+        context.logger.always("\n====ERROR: DeviceSanitizer: {} on {}",
+                              DeviceSanitizerFormat(AH->ErrorType),
+                              DeviceSanitizerFormat(AH->MemoryType));
+        context.logger.always(
+            "{} of size {} at kernel <{}> LID({}, {}, {}) GID({}, "
+            "{}, {})",
+            AH->IsWrite ? "WRITE" : "READ", AH->AccessSize, KernelName.c_str(),
+            AH->LID0, AH->LID1, AH->LID2, AH->GID0, AH->GID1, AH->GID2);
+        context.logger.always("  #0 {} {}:{}", Func, File, AH->Line);
+        if (!AH->IsRecover) {
+            exit(1);
+        }
+    }
+}
+
+ur_result_t SanitizerInterceptor::allocShadowMemory(
+    ur_context_handle_t Context, std::shared_ptr<DeviceInfo> &DeviceInfo) {
+    if (DeviceInfo->Type == DeviceType::CPU) {
+        if (!m_IsInASanContext) {
+            context.logger.error("Host AddressSanitizer needs to be enabled");
+            return UR_RESULT_ERROR_INVALID_CONTEXT;
+        }
+
+        // Based on "compiler-rt/lib/asan/asan_mapping.h"
+        // Typical shadow mapping on Linux/x86_64 with SHADOW_OFFSET == 0x00007fff8000:
+        DeviceInfo->ShadowOffset = 0x00007fff8000ULL;
+        DeviceInfo->ShadowOffsetEnd = 0x10007fff7fffULL;
+        // // Default Linux/i386 mapping on x86_64 machine:
+        // DeviceInfo->ShadowOffset = 0x20000000ULL;
+        // DeviceInfo->ShadowOffsetEnd = 0x3fffffffULL;
+        // // Default Linux/i386 mapping on i386 machine
+        // DeviceInfo->ShadowOffset = 0x20000000ULL;
+        // DeviceInfo->ShadowOffsetEnd = 0x37ffffffULL;
+    } else if (DeviceInfo->Type == DeviceType::GPU_PVC) {
+        /// SHADOW MEMORY MAPPING (PVC, with CPU 47bit)
+        ///   Host/Shared USM : 0x0              ~ 0x0fff_ffff_ffff
+        ///   ?               : 0x1000_0000_0000 ~ 0x1fff_ffff_ffff
+        ///   Device USM      : 0x2000_0000_0000 ~ 0x3fff_ffff_ffff
+        constexpr size_t SHADOW_SIZE = 1ULL << 46;
+        // FIXME: Currently, level-zero doesn't create independent VAs for each contexts
+        static uptr ShadowOffset, ShadowOffsetEnd;
+
+        if (!ShadowOffset) {
+            // TODO: Protect Bad Zone
+            auto Result = context.urDdiTable.VirtualMem.pfnReserve(
+                Context, nullptr, SHADOW_SIZE, (void **)&ShadowOffset);
+            if (Result != UR_RESULT_SUCCESS) {
+                context.logger.error(
+                    "Failed to allocate shadow memory on PVC: {}", Result);
+                return Result;
+            }
+            ShadowOffsetEnd = ShadowOffset + SHADOW_SIZE;
+        }
+
+        DeviceInfo->ShadowOffset = ShadowOffset;
+        DeviceInfo->ShadowOffsetEnd = ShadowOffsetEnd;
+    } else {
+        context.logger.error("Unsupport device type");
+        return UR_RESULT_ERROR_INVALID_ARGUMENT;
+    }
+    context.logger.info("ShadowMemory(Global): {} - {}",
+                        (void *)DeviceInfo->ShadowOffset,
+                        (void *)DeviceInfo->ShadowOffsetEnd);
+
+    return UR_RESULT_SUCCESS;
+}
+
+ur_result_t SanitizerInterceptor::updateShadowMemory(ur_kernel_handle_t Kernel,
+                                                     ur_queue_handle_t Queue) {
     auto Context = getContext(Queue);
     auto Device = getDevice(Queue);
     assert(Device != nullptr);
 
     auto ContextInfo = getContextInfo(Context);
-
     auto DeviceInfo = ContextInfo->getDeviceInfo(Device);
     auto QueueInfo = ContextInfo->getQueueInfo(Queue);
+    auto KernelInfo = ContextInfo->getKernelInfo(Kernel);
 
+    std::unique_lock<ur_shared_mutex> KernelGuard(KernelInfo->Mutex,
+                                                  std::defer_lock);
     std::unique_lock<ur_shared_mutex> DeviceGuard(DeviceInfo->Mutex,
                                                   std::defer_lock);
-    std::scoped_lock<std::unique_lock<ur_shared_mutex>, ur_mutex> Guard(
-        DeviceGuard, QueueInfo->Mutex);
+    std::scoped_lock<std::unique_lock<ur_shared_mutex>,
+                     std::unique_lock<ur_shared_mutex>, ur_mutex>
+        Guard(KernelGuard, DeviceGuard, QueueInfo->Mutex);
 
     ur_event_handle_t LastEvent = QueueInfo->LastEvent;
 
-    for (auto &AllocInfo : DeviceInfo->AllocInfos) {
-        UR_CALL(enqueueAllocInfo(Context, Device, Queue, AllocInfo, LastEvent));
+    for (auto &AI : DeviceInfo->AllocInfos) {
+        UR_CALL(enqueueAllocInfo(Queue, AI.get(), LastEvent));
     }
     DeviceInfo->AllocInfos.clear();
+
+    for (auto &Pair : KernelInfo->Arguments) {
+        if (auto Buffer = Pair.second.lock()) {
+            auto AI = Buffer->getAllocInfo(Device);
+            UR_CALL(enqueueAllocInfo(Queue, &AI, LastEvent));
+        }
+    }
 
     QueueInfo->LastEvent = LastEvent;
 

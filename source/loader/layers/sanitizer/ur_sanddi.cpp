@@ -36,7 +36,7 @@ __urdlllocal ur_result_t UR_APICALL urUSMHostAlloc(
     context.logger.debug("==== urUSMHostAlloc");
 
     return context.interceptor->allocateMemory(
-        hContext, nullptr, pUSMDesc, pool, size, ppMem, USMMemoryType::HOST);
+        hContext, nullptr, pUSMDesc, pool, size, ppMem, AllocType::HOST_USM);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -61,7 +61,7 @@ __urdlllocal ur_result_t UR_APICALL urUSMDeviceAlloc(
     context.logger.debug("==== urUSMDeviceAlloc");
 
     return context.interceptor->allocateMemory(
-        hContext, hDevice, pUSMDesc, pool, size, ppMem, USMMemoryType::DEVICE);
+        hContext, hDevice, pUSMDesc, pool, size, ppMem, AllocType::DEVICE_USM);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -86,7 +86,7 @@ __urdlllocal ur_result_t UR_APICALL urUSMSharedAlloc(
     context.logger.debug("==== urUSMSharedAlloc");
 
     return context.interceptor->allocateMemory(
-        hContext, hDevice, pUSMDesc, pool, size, ppMem, USMMemoryType::SHARE);
+        hContext, hDevice, pUSMDesc, pool, size, ppMem, AllocType::SHARED_USM);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -362,7 +362,7 @@ __urdlllocal ur_result_t UR_APICALL urMemBufferCreate(
     uptr RZLog = ComputeRZLog(size);
     uptr RZSize = RZLog2Size(RZLog);
     uptr RoundedSize = RoundUpTo(size, Alignment);
-    uptr NeededSize = RoundedSize + RZSize * 2;
+    uptr NeededSize = RoundedSize + RZSize;
 
     ur_result_t result =
         pfnBufferCreate(hContext, flags, NeededSize, pProperties, phBuffer);
@@ -371,12 +371,10 @@ __urdlllocal ur_result_t UR_APICALL urMemBufferCreate(
         return result;
     }
 
-    MemBuffer *pBuffer = new MemBuffer;
-    pBuffer->Buffer = *phBuffer;
-    pBuffer->Size = size;
-    pBuffer->RZSize = RZSize;
-    *phBuffer = reinterpret_cast<ur_mem_handle_t>(pBuffer);
-    context.interceptor->insertBuffer(*phBuffer);
+    auto pBuffer =
+        std::make_shared<MemBuffer>(MemBuffer{*phBuffer, size, NeededSize});
+    *phBuffer = reinterpret_cast<ur_mem_handle_t>(pBuffer.get());
+    context.interceptor->insertBuffer(pBuffer);
 
     return result;
 }
@@ -448,7 +446,15 @@ __urdlllocal ur_result_t UR_APICALL urMemRelease(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
-    ur_result_t result = pfnRelease(context.interceptor->getRealBuffer(hMem));
+    ur_result_t result;
+    if (auto pBuffer = context.interceptor->getBuffer(hMem)) {
+        result = pfnRelease(pBuffer->Buffer);
+        if (result == UR_RESULT_SUCCESS) {
+            context.interceptor->eraseBuffer(pBuffer->Buffer);
+        }
+    } else {
+        result = pfnRelease(hMem);
+    }
 
     return result;
 }
@@ -512,9 +518,21 @@ __urdlllocal ur_result_t UR_APICALL urKernelSetArgMemObj(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
-    ur_result_t result =
-        pfnSetArgMemObj(hKernel, argIndex, pProperties,
-                        context.interceptor->getRealBuffer(hArgValue));
+    ur_result_t result;
+    if (auto pBuffer = context.interceptor->getBuffer(hArgValue)) {
+        result = pfnSetArgMemObj(hKernel, argIndex, pProperties,
+                                 context.interceptor->getRealBuffer(hArgValue));
+        if (result == UR_RESULT_SUCCESS) {
+            auto hContext = getContext(hKernel);
+            auto ContextInfo = context.interceptor->getContextInfo(hContext);
+            auto KernelInfo = ContextInfo->getKernelInfo(hKernel);
+            std::scoped_lock<ur_shared_mutex> Guard(KernelInfo->Mutex);
+            KernelInfo->Arguments.emplace(argIndex, pBuffer);
+        }
+    } else {
+        result = pfnSetArgMemObj(hKernel, argIndex, pProperties,
+                                 context.interceptor->getRealBuffer(hArgValue));
+    }
 
     return result;
 }

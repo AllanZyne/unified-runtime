@@ -17,19 +17,32 @@
 
 #include <map>
 #include <memory>
-#include <unordered_set>
 #include <vector>
 
 namespace ur_sanitizer_layer {
 
-enum USMMemoryType { DEVICE, SHARE, HOST, MEM_BUFFER };
+enum class AllocType {
+    DEVICE_USM,
+    SHARED_USM,
+    HOST_USM,
+    MEM_BUFFER,
+    DEVICE_GLOBAL
+};
 
-struct USMAllocInfo {
+struct AllocInfo {
     uptr AllocBegin;
     uptr UserBegin;
     uptr UserEnd;
     size_t AllocSize;
-    USMMemoryType Type;
+    AllocType Type;
+};
+
+struct MemBuffer {
+    ur_mem_handle_t Buffer;
+    size_t Size;
+    size_t SizeWithRZ;
+
+    AllocInfo getAllocInfo(ur_device_handle_t Device);
 };
 
 enum class DeviceType { UNKNOWN, CPU, GPU_PVC, GPU_DG2 };
@@ -42,12 +55,17 @@ struct DeviceInfo {
 
     // Lock InitPool & AllocInfos
     ur_shared_mutex Mutex;
-    std::vector<std::shared_ptr<USMAllocInfo>> AllocInfos;
+    std::vector<std::shared_ptr<AllocInfo>> AllocInfos;
 };
 
 struct QueueInfo {
     ur_mutex Mutex;
     ur_event_handle_t LastEvent;
+};
+
+struct KernelInfo {
+    ur_shared_mutex Mutex;
+    std::unordered_map<int, std::weak_ptr<MemBuffer>> Arguments;
 };
 
 struct ContextInfo {
@@ -64,7 +82,13 @@ struct ContextInfo {
         return QueueMap[Queue];
     }
 
-    std::shared_ptr<USMAllocInfo> getUSMAllocInfo(uptr Address) {
+    std::shared_ptr<KernelInfo> getKernelInfo(ur_kernel_handle_t Kernel) {
+        std::shared_lock<ur_shared_mutex> Guard(Mutex);
+        assert(KernelMap.find(Kernel) != KernelMap.end());
+        return KernelMap[Kernel];
+    }
+
+    std::shared_ptr<AllocInfo> getUSMAllocInfo(uptr Address) {
         std::shared_lock<ur_shared_mutex> Guard(Mutex);
         assert(AllocatedUSMMap.find(Address) != AllocatedUSMMap.end());
         return AllocatedUSMMap[Address];
@@ -74,11 +98,13 @@ struct ContextInfo {
     std::unordered_map<ur_device_handle_t, std::shared_ptr<DeviceInfo>>
         DeviceMap;
     std::unordered_map<ur_queue_handle_t, std::shared_ptr<QueueInfo>> QueueMap;
+    std::unordered_map<ur_kernel_handle_t, std::shared_ptr<KernelInfo>>
+        KernelMap;
 
     /// key: USMAllocInfo.AllocBegin
     /// value: USMAllocInfo
     /// Use AllocBegin as key can help to detect underflow pointer
-    std::map<uptr, std::shared_ptr<USMAllocInfo>> AllocatedUSMMap;
+    std::map<uptr, std::shared_ptr<AllocInfo>> AllocatedUSMMap;
 };
 
 struct LaunchInfo {
@@ -95,12 +121,6 @@ struct LaunchInfo {
     ~LaunchInfo();
 };
 
-struct MemBuffer {
-    ur_mem_handle_t Buffer;
-    size_t Size;
-    size_t RZSize;
-};
-
 class SanitizerInterceptor {
   public:
     SanitizerInterceptor();
@@ -109,7 +129,7 @@ class SanitizerInterceptor {
                                ur_device_handle_t Device,
                                const ur_usm_desc_t *Properties,
                                ur_usm_pool_handle_t Pool, size_t Size,
-                               void **ResultPtr, USMMemoryType Type);
+                               void **ResultPtr, AllocType Type);
     ur_result_t releaseMemory(ur_context_handle_t Context, void *Ptr);
 
     ur_result_t preLaunchKernel(ur_kernel_handle_t Kernel,
@@ -123,61 +143,40 @@ class SanitizerInterceptor {
     ur_result_t eraseContext(ur_context_handle_t Context);
 
     ur_result_t insertDevice(ur_context_handle_t Context,
-                          ur_device_handle_t Device);
+                             ur_device_handle_t Device);
 
-    ur_result_t insertQueue(ur_context_handle_t Context, ur_queue_handle_t Queue);
-    ur_result_t eraseQueue(ur_context_handle_t Context,
+    ur_result_t insertQueue(ur_context_handle_t Context,
                             ur_queue_handle_t Queue);
+    ur_result_t eraseQueue(ur_context_handle_t Context,
+                           ur_queue_handle_t Queue);
 
-    void insertBuffer(ur_mem_handle_t Buffer) {
-        std::scoped_lock<ur_shared_mutex> Guard(m_MemBufferSetMutex);
-        assert(m_MemBufferSet.find(Buffer) == m_MemBufferSet.end());
-        m_MemBufferSet.emplace(Buffer);
+    void insertBuffer(std::shared_ptr<MemBuffer> MemBuffer) {
+        std::scoped_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
+        assert(m_MemBufferMap.find(MemBuffer->Buffer) == m_MemBufferMap.end());
+        m_MemBufferMap.emplace(MemBuffer->Buffer, MemBuffer);
     }
 
-    void eraseBuffer(ur_mem_handle_t Buffer) {
-        std::scoped_lock<ur_shared_mutex> Guard(m_MemBufferSetMutex);
-        assert(m_MemBufferSet.find(Buffer) != m_MemBufferSet.end());
-        m_MemBufferSet.erase(Buffer);
+    void eraseBuffer(ur_mem_handle_t MemBuffer) {
+        std::scoped_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
+        assert(m_MemBufferMap.find(MemBuffer) != m_MemBufferMap.end());
+        m_MemBufferMap.erase(MemBuffer);
     }
 
-    MemBuffer *getBuffer(ur_mem_handle_t Buffer) {
-        std::shared_lock<ur_shared_mutex> Guard(m_MemBufferSetMutex);
-        if (m_MemBufferSet.count(Buffer)) {
-            return reinterpret_cast<MemBuffer *>(Buffer);
+    std::shared_ptr<MemBuffer> getBuffer(ur_mem_handle_t MemBuffer) {
+        std::shared_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
+        if (m_MemBufferMap.count(MemBuffer)) {
+            return m_MemBufferMap.at(MemBuffer);
         }
         return nullptr;
     }
 
-    ur_mem_handle_t getRealBuffer(ur_mem_handle_t Buffer) {
-        std::shared_lock<ur_shared_mutex> Guard(m_MemBufferSetMutex);
-        if (m_MemBufferSet.count(Buffer)) {
-            return reinterpret_cast<MemBuffer *>(Buffer)->Buffer;
+    ur_mem_handle_t getRealBuffer(ur_mem_handle_t MemBuffer) {
+        std::shared_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
+        if (m_MemBufferMap.count(MemBuffer)) {
+            return m_MemBufferMap.at(MemBuffer).get()->Buffer;
         }
-        return Buffer;
+        return MemBuffer;
     }
-
-  private:
-    ur_result_t updateShadowMemory(ur_queue_handle_t Queue);
-    ur_result_t enqueueAllocInfo(ur_context_handle_t Context,
-                                 ur_device_handle_t Device,
-                                 ur_queue_handle_t Queue,
-                                 std::shared_ptr<USMAllocInfo> &AllocInfo,
-                                 ur_event_handle_t &LastEvent);
-
-    /// Initialize Global Variables & Kernel Name at first Launch
-    ur_result_t prepareLaunch(ur_queue_handle_t Queue,
-                              ur_kernel_handle_t Kernel, LaunchInfo &LaunchInfo,
-                              uint32_t numWorkgroup);
-
-    ur_result_t allocShadowMemory(ur_context_handle_t Context,
-                                  std::shared_ptr<DeviceInfo> &DeviceInfo);
-    ur_result_t enqueueMemSetShadow(ur_context_handle_t Context,
-                                    ur_device_handle_t Device,
-                                    ur_queue_handle_t Queue, uptr Addr,
-                                    uptr Size, u8 Value,
-                                    ur_event_handle_t DepEvent,
-                                    ur_event_handle_t *OutEvent);
 
     std::shared_ptr<ContextInfo> getContextInfo(ur_context_handle_t Context) {
         std::shared_lock<ur_shared_mutex> Guard(m_ContextMapMutex);
@@ -186,12 +185,25 @@ class SanitizerInterceptor {
     }
 
   private:
+    ur_result_t updateShadowMemory(ur_kernel_handle_t Kernel,
+                                   ur_queue_handle_t Queue);
+
+    /// Initialize Global Variables & Kernel Name at first Launch
+    ur_result_t prepareLaunch(ur_queue_handle_t Queue,
+                              ur_kernel_handle_t Kernel, LaunchInfo &LaunchInfo,
+                              uint32_t numWorkgroup);
+
+    ur_result_t allocShadowMemory(ur_context_handle_t Context,
+                                  std::shared_ptr<DeviceInfo> &DeviceInfo);
+
+  private:
     std::unordered_map<ur_context_handle_t, std::shared_ptr<ContextInfo>>
         m_ContextMap;
     ur_shared_mutex m_ContextMapMutex;
 
-    std::unordered_set<ur_mem_handle_t> m_MemBufferSet;
-    ur_shared_mutex m_MemBufferSetMutex;
+    std::unordered_map<ur_mem_handle_t, std::shared_ptr<MemBuffer>>
+        m_MemBufferMap;
+    ur_shared_mutex m_MemBufferMapMutex;
 
     bool m_IsInASanContext;
 };
