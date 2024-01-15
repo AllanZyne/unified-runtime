@@ -65,7 +65,7 @@ struct QueueInfo {
 
 struct KernelInfo {
     ur_shared_mutex Mutex;
-    std::unordered_map<int, std::weak_ptr<MemBuffer>> Arguments;
+    std::unordered_map<int, std::weak_ptr<MemBuffer>> ArgumentsMap;
 };
 
 struct ContextInfo {
@@ -150,19 +150,19 @@ class SanitizerInterceptor {
     ur_result_t eraseQueue(ur_context_handle_t Context,
                            ur_queue_handle_t Queue);
 
-    void insertBuffer(std::shared_ptr<MemBuffer> MemBuffer) {
+    void insertMemBuffer(std::shared_ptr<MemBuffer> MemBuffer) {
         std::scoped_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
         assert(m_MemBufferMap.find(MemBuffer->Buffer) == m_MemBufferMap.end());
         m_MemBufferMap.emplace(MemBuffer->Buffer, MemBuffer);
     }
 
-    void eraseBuffer(ur_mem_handle_t MemBuffer) {
+    void eraseMemBuffer(ur_mem_handle_t MemBuffer) {
         std::scoped_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
         assert(m_MemBufferMap.find(MemBuffer) != m_MemBufferMap.end());
         m_MemBufferMap.erase(MemBuffer);
     }
 
-    std::shared_ptr<MemBuffer> getBuffer(ur_mem_handle_t MemBuffer) {
+    std::shared_ptr<MemBuffer> getMemBuffer(ur_mem_handle_t MemBuffer) {
         std::shared_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
         if (m_MemBufferMap.count(MemBuffer)) {
             return m_MemBufferMap.at(MemBuffer);
@@ -170,7 +170,7 @@ class SanitizerInterceptor {
         return nullptr;
     }
 
-    ur_mem_handle_t getRealBuffer(ur_mem_handle_t MemBuffer) {
+    ur_mem_handle_t getMemHandle(ur_mem_handle_t MemBuffer) {
         std::shared_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
         if (m_MemBufferMap.count(MemBuffer)) {
             return m_MemBufferMap.at(MemBuffer).get()->Buffer;

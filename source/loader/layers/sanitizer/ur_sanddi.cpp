@@ -358,6 +358,8 @@ __urdlllocal ur_result_t UR_APICALL urMemBufferCreate(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
+    context.logger.debug("==== urMemBufferCreate");
+
     auto Alignment = ASAN_SHADOW_GRANULARITY;
     uptr RZLog = ComputeRZLog(size);
     uptr RZSize = RZLog2Size(RZLog);
@@ -371,10 +373,10 @@ __urdlllocal ur_result_t UR_APICALL urMemBufferCreate(
         return result;
     }
 
-    auto pBuffer =
+    auto pMemBuffer =
         std::make_shared<MemBuffer>(MemBuffer{*phBuffer, size, NeededSize});
-    *phBuffer = reinterpret_cast<ur_mem_handle_t>(pBuffer.get());
-    context.interceptor->insertBuffer(pBuffer);
+    *phBuffer = reinterpret_cast<ur_mem_handle_t>(pMemBuffer.get());
+    context.interceptor->insertMemBuffer(pMemBuffer);
 
     return result;
 }
@@ -402,13 +404,15 @@ __urdlllocal ur_result_t UR_APICALL urMemGetInfo(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
-    if (auto pBuffer = context.interceptor->getBuffer(hMemory)) {
+    context.logger.debug("==== urMemGetInfo");
+
+    if (auto pMemBuffer = context.interceptor->getMemBuffer(hMemory)) {
         if (propName == UR_MEM_INFO_SIZE) {
             UrReturnHelper ReturnValue(propSize, pPropValue, pPropSizeRet);
-            return ReturnValue(pBuffer->Size);
+            return ReturnValue(pMemBuffer->Size);
         } else {
-            ur_result_t result = pfnGetInfo(pBuffer->Buffer, propName, propSize,
-                                            pPropValue, pPropSizeRet);
+            ur_result_t result = pfnGetInfo(pMemBuffer->Buffer, propName,
+                                            propSize, pPropValue, pPropSizeRet);
             return result;
         }
     }
@@ -430,7 +434,7 @@ __urdlllocal ur_result_t UR_APICALL urMemRetain(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
-    ur_result_t result = pfnRetain(context.interceptor->getRealBuffer(hMem));
+    ur_result_t result = pfnRetain(context.interceptor->getMemHandle(hMem));
 
     return result;
 }
@@ -446,11 +450,13 @@ __urdlllocal ur_result_t UR_APICALL urMemRelease(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
+    context.logger.debug("==== urMemRelease");
+
     ur_result_t result;
-    if (auto pBuffer = context.interceptor->getBuffer(hMem)) {
-        result = pfnRelease(pBuffer->Buffer);
+    if (auto pMemBuffer = context.interceptor->getMemBuffer(hMem)) {
+        result = pfnRelease(pMemBuffer->Buffer);
         if (result == UR_RESULT_SUCCESS) {
-            context.interceptor->eraseBuffer(pBuffer->Buffer);
+            context.interceptor->eraseMemBuffer(pMemBuffer->Buffer);
         }
     } else {
         result = pfnRelease(hMem);
@@ -477,9 +483,11 @@ __urdlllocal ur_result_t UR_APICALL urMemBufferPartition(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
+    context.logger.debug("==== urMemBufferPartition");
+
     // TODO: Boundary check?
     ur_result_t result =
-        pfnBufferPartition(context.interceptor->getRealBuffer(hBuffer), flags,
+        pfnBufferPartition(context.interceptor->getMemHandle(hBuffer), flags,
                            bufferCreateType, pRegion, phMem);
 
     return result;
@@ -499,7 +507,7 @@ __urdlllocal ur_result_t UR_APICALL urMemGetNativeHandle(
     }
 
     ur_result_t result = pfnGetNativeHandle(
-        context.interceptor->getRealBuffer(hMem), phNativeMem);
+        context.interceptor->getMemHandle(hMem), phNativeMem);
 
     return result;
 }
@@ -519,20 +527,22 @@ __urdlllocal ur_result_t UR_APICALL urKernelSetArgMemObj(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
+    context.logger.debug("==== urKernelSetArgMemObj");
+
     ur_result_t result;
-    if (auto pBuffer = context.interceptor->getBuffer(hArgValue)) {
+    if (auto pMemBuffer = context.interceptor->getMemBuffer(hArgValue)) {
         result = pfnSetArgMemObj(hKernel, argIndex, pProperties,
-                                 context.interceptor->getRealBuffer(hArgValue));
+                                 context.interceptor->getMemHandle(hArgValue));
         if (result == UR_RESULT_SUCCESS) {
             auto hContext = getContext(hKernel);
             auto ContextInfo = context.interceptor->getContextInfo(hContext);
             auto KernelInfo = ContextInfo->getKernelInfo(hKernel);
             std::scoped_lock<ur_shared_mutex> Guard(KernelInfo->Mutex);
-            KernelInfo->Arguments.emplace(argIndex, pBuffer);
+            KernelInfo->ArgumentsMap.emplace(argIndex, pMemBuffer);
         }
     } else {
         result = pfnSetArgMemObj(hKernel, argIndex, pProperties,
-                                 context.interceptor->getRealBuffer(hArgValue));
+                                 context.interceptor->getMemHandle(hArgValue));
     }
 
     return result;
@@ -565,7 +575,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferRead(
     }
 
     ur_result_t result = pfnMemBufferRead(
-        hQueue, context.interceptor->getRealBuffer(hBuffer), blockingRead,
+        hQueue, context.interceptor->getMemHandle(hBuffer), blockingRead,
         offset, size, pDst, numEventsInWaitList, phEventWaitList, phEvent);
 
     return result;
@@ -600,7 +610,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferWrite(
     }
 
     ur_result_t result = pfnMemBufferWrite(
-        hQueue, context.interceptor->getRealBuffer(hBuffer), blockingWrite,
+        hQueue, context.interceptor->getMemHandle(hBuffer), blockingWrite,
         offset, size, pSrc, numEventsInWaitList, phEventWaitList, phEvent);
 
     return result;
@@ -645,7 +655,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferReadRect(
     }
 
     ur_result_t result = pfnMemBufferReadRect(
-        hQueue, context.interceptor->getRealBuffer(hBuffer), blockingRead,
+        hQueue, context.interceptor->getMemHandle(hBuffer), blockingRead,
         bufferOrigin, hostOrigin, region, bufferRowPitch, bufferSlicePitch,
         hostRowPitch, hostSlicePitch, pDst, numEventsInWaitList,
         phEventWaitList, phEvent);
@@ -696,7 +706,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferWriteRect(
     }
 
     ur_result_t result = pfnMemBufferWriteRect(
-        hQueue, context.interceptor->getRealBuffer(hBuffer), blockingWrite,
+        hQueue, context.interceptor->getMemHandle(hBuffer), blockingWrite,
         bufferOrigin, hostOrigin, region, bufferRowPitch, bufferSlicePitch,
         hostRowPitch, hostSlicePitch, pSrc, numEventsInWaitList,
         phEventWaitList, phEvent);
@@ -733,8 +743,8 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferCopy(
 
     ur_result_t result;
     result = pfnMemBufferCopy(
-        hQueue, context.interceptor->getRealBuffer(hBufferSrc),
-        context.interceptor->getRealBuffer(hBufferDst), srcOffset, dstOffset,
+        hQueue, context.interceptor->getMemHandle(hBufferSrc),
+        context.interceptor->getMemHandle(hBufferDst), srcOffset, dstOffset,
         size, numEventsInWaitList, phEventWaitList, phEvent);
 
     return result;
@@ -777,8 +787,8 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferCopyRect(
     }
 
     ur_result_t result = pfnMemBufferCopyRect(
-        hQueue, context.interceptor->getRealBuffer(hBufferSrc),
-        context.interceptor->getRealBuffer(hBufferDst), srcOrigin, dstOrigin,
+        hQueue, context.interceptor->getMemHandle(hBufferSrc),
+        context.interceptor->getMemHandle(hBufferDst), srcOrigin, dstOrigin,
         region, srcRowPitch, srcSlicePitch, dstRowPitch, dstSlicePitch,
         numEventsInWaitList, phEventWaitList, phEvent);
 
@@ -812,7 +822,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferFill(
     }
 
     ur_result_t result =
-        pfnMemBufferFill(hQueue, context.interceptor->getRealBuffer(hBuffer),
+        pfnMemBufferFill(hQueue, context.interceptor->getMemHandle(hBuffer),
                          pPattern, patternSize, offset, size,
                          numEventsInWaitList, phEventWaitList, phEvent);
 
@@ -848,7 +858,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferMap(
     }
 
     ur_result_t result = pfnMemBufferMap(
-        hQueue, context.interceptor->getRealBuffer(hBuffer), blockingMap,
+        hQueue, context.interceptor->getMemHandle(hBuffer), blockingMap,
         mapFlags, offset, size, numEventsInWaitList, phEventWaitList, phEvent,
         ppRetMap);
 
@@ -879,8 +889,8 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemUnmap(
     }
 
     ur_result_t result =
-        pfnMemUnmap(hQueue, context.interceptor->getRealBuffer(hMem),
-                    pMappedPtr, numEventsInWaitList, phEventWaitList, phEvent);
+        pfnMemUnmap(hQueue, context.interceptor->getMemHandle(hMem), pMappedPtr,
+                    numEventsInWaitList, phEventWaitList, phEvent);
 
     return result;
 }
@@ -910,8 +920,8 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendMemBufferCopyExp(
     }
 
     ur_result_t result = pfnAppendMemBufferCopyExp(
-        hCommandBuffer, context.interceptor->getRealBuffer(hSrcMem),
-        context.interceptor->getRealBuffer(hDstMem), srcOffset, dstOffset, size,
+        hCommandBuffer, context.interceptor->getMemHandle(hSrcMem),
+        context.interceptor->getMemHandle(hDstMem), srcOffset, dstOffset, size,
         numSyncPointsInWaitList, pSyncPointWaitList, pSyncPoint);
 
     return result;
@@ -942,7 +952,7 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendMemBufferWriteExp(
     }
 
     ur_result_t result = pfnAppendMemBufferWriteExp(
-        hCommandBuffer, context.interceptor->getRealBuffer(hBuffer), offset,
+        hCommandBuffer, context.interceptor->getMemHandle(hBuffer), offset,
         size, pSrc, numSyncPointsInWaitList, pSyncPointWaitList, pSyncPoint);
 
     return result;
@@ -972,7 +982,7 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendMemBufferReadExp(
     }
 
     ur_result_t result = pfnAppendMemBufferReadExp(
-        hCommandBuffer, context.interceptor->getRealBuffer(hBuffer), offset,
+        hCommandBuffer, context.interceptor->getMemHandle(hBuffer), offset,
         size, pDst, numSyncPointsInWaitList, pSyncPointWaitList, pSyncPoint);
 
     return result;
@@ -1010,8 +1020,8 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendMemBufferCopyRectExp(
     }
 
     ur_result_t result = pfnAppendMemBufferCopyRectExp(
-        hCommandBuffer, context.interceptor->getRealBuffer(hSrcMem),
-        context.interceptor->getRealBuffer(hDstMem), srcOrigin, dstOrigin,
+        hCommandBuffer, context.interceptor->getMemHandle(hSrcMem),
+        context.interceptor->getMemHandle(hDstMem), srcOrigin, dstOrigin,
         region, srcRowPitch, srcSlicePitch, dstRowPitch, dstSlicePitch,
         numSyncPointsInWaitList, pSyncPointWaitList, pSyncPoint);
 
@@ -1056,7 +1066,7 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendMemBufferWriteRectExp(
     }
 
     ur_result_t result = pfnAppendMemBufferWriteRectExp(
-        hCommandBuffer, context.interceptor->getRealBuffer(hBuffer),
+        hCommandBuffer, context.interceptor->getMemHandle(hBuffer),
         bufferOffset, hostOffset, region, bufferRowPitch, bufferSlicePitch,
         hostRowPitch, hostSlicePitch, pSrc, numSyncPointsInWaitList,
         pSyncPointWaitList, pSyncPoint);
@@ -1100,7 +1110,7 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendMemBufferReadRectExp(
     }
 
     ur_result_t result = pfnAppendMemBufferReadRectExp(
-        hCommandBuffer, context.interceptor->getRealBuffer(hBuffer),
+        hCommandBuffer, context.interceptor->getMemHandle(hBuffer),
         bufferOffset, hostOffset, region, bufferRowPitch, bufferSlicePitch,
         hostRowPitch, hostSlicePitch, pDst, numSyncPointsInWaitList,
         pSyncPointWaitList, pSyncPoint);
@@ -1134,13 +1144,85 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendMemBufferFillExp(
     }
 
     ur_result_t result = pfnAppendMemBufferFillExp(
-        hCommandBuffer, context.interceptor->getRealBuffer(hBuffer), pPattern,
+        hCommandBuffer, context.interceptor->getMemHandle(hBuffer), pPattern,
         patternSize, offset, size, numSyncPointsInWaitList, pSyncPointWaitList,
         pSyncPoint);
 
     return result;
 }
 
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Intercept function for urKernelCreate
+__urdlllocal ur_result_t UR_APICALL urKernelCreate(
+    ur_program_handle_t hProgram, ///< [in] handle of the program instance
+    const char *pKernelName,      ///< [in] pointer to null-terminated string.
+    ur_kernel_handle_t
+        *phKernel ///< [out] pointer to handle of kernel object created.
+) {
+    auto pfnCreate = context.urDdiTable.Kernel.pfnCreate;
+
+    if (nullptr == pfnCreate) {
+        return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
+    }
+
+    context.logger.debug("==== urKernelCreate");
+
+    ur_result_t result = pfnCreate(hProgram, pKernelName, phKernel);
+    if (result == UR_RESULT_SUCCESS) {
+        auto hContext = getContext(hProgram);
+        auto ContextInfo = context.interceptor->getContextInfo(hContext);
+        std::scoped_lock<ur_shared_mutex> Guard(ContextInfo->Mutex);
+        ContextInfo->KernelMap.emplace(*phKernel,
+                                       std::make_shared<KernelInfo>());
+    }
+
+    return result;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Exported function for filling application's CommandBufferExp table
+///        with current process' addresses
+///
+/// @returns
+///     - ::UR_RESULT_SUCCESS
+///     - ::UR_RESULT_ERROR_INVALID_NULL_POINTER
+///     - ::UR_RESULT_ERROR_UNSUPPORTED_VERSION
+__urdlllocal ur_result_t UR_APICALL urGetCommandBufferExpProcAddrTable(
+    ur_api_version_t version, ///< [in] API version requested
+    ur_command_buffer_exp_dditable_t
+        *pDdiTable ///< [in,out] pointer to table of DDI function pointers
+) {
+
+    if (nullptr == pDdiTable) {
+        return UR_RESULT_ERROR_INVALID_NULL_POINTER;
+    }
+
+    if (UR_MAJOR_VERSION(ur_sanitizer_layer::context.version) !=
+            UR_MAJOR_VERSION(version) ||
+        UR_MINOR_VERSION(ur_sanitizer_layer::context.version) >
+            UR_MINOR_VERSION(version)) {
+        return UR_RESULT_ERROR_UNSUPPORTED_VERSION;
+    }
+
+    ur_result_t result = UR_RESULT_SUCCESS;
+
+    pDdiTable->pfnAppendMemBufferCopyExp =
+        ur_sanitizer_layer::urCommandBufferAppendMemBufferCopyExp;
+    pDdiTable->pfnAppendMemBufferWriteExp =
+        ur_sanitizer_layer::urCommandBufferAppendMemBufferWriteExp;
+    pDdiTable->pfnAppendMemBufferReadExp =
+        ur_sanitizer_layer::urCommandBufferAppendMemBufferReadExp;
+    pDdiTable->pfnAppendMemBufferCopyRectExp =
+        ur_sanitizer_layer::urCommandBufferAppendMemBufferCopyRectExp;
+    pDdiTable->pfnAppendMemBufferWriteRectExp =
+        ur_sanitizer_layer::urCommandBufferAppendMemBufferWriteRectExp;
+    pDdiTable->pfnAppendMemBufferReadRectExp =
+        ur_sanitizer_layer::urCommandBufferAppendMemBufferReadRectExp;
+    pDdiTable->pfnAppendMemBufferFillExp =
+        ur_sanitizer_layer::urCommandBufferAppendMemBufferFillExp;
+
+    return result;
+}
 ///////////////////////////////////////////////////////////////////////////////
 /// @brief Exported function for filling application's Mem table
 ///        with current process' addresses
@@ -1202,6 +1284,7 @@ __urdlllocal ur_result_t UR_APICALL urGetKernelProcAddrTable(
 
     ur_result_t result = UR_RESULT_SUCCESS;
 
+    pDdiTable->pfnCreate = ur_sanitizer_layer::urKernelCreate;
     pDdiTable->pfnSetArgMemObj = ur_sanitizer_layer::urKernelSetArgMemObj;
 
     return result;
@@ -1266,6 +1349,18 @@ __urdlllocal ur_result_t UR_APICALL urGetEnqueueProcAddrTable(
     ur_result_t result = UR_RESULT_SUCCESS;
 
     pDdiTable->pfnKernelLaunch = ur_sanitizer_layer::urEnqueueKernelLaunch;
+    pDdiTable->pfnMemBufferRead = ur_sanitizer_layer::urEnqueueMemBufferRead;
+    pDdiTable->pfnMemBufferWrite = ur_sanitizer_layer::urEnqueueMemBufferWrite;
+    pDdiTable->pfnMemBufferReadRect =
+        ur_sanitizer_layer::urEnqueueMemBufferReadRect;
+    pDdiTable->pfnMemBufferWriteRect =
+        ur_sanitizer_layer::urEnqueueMemBufferWriteRect;
+    pDdiTable->pfnMemBufferCopy = ur_sanitizer_layer::urEnqueueMemBufferCopy;
+    pDdiTable->pfnMemBufferCopyRect =
+        ur_sanitizer_layer::urEnqueueMemBufferCopyRect;
+    pDdiTable->pfnMemBufferFill = ur_sanitizer_layer::urEnqueueMemBufferFill;
+    pDdiTable->pfnMemBufferMap = ur_sanitizer_layer::urEnqueueMemBufferMap;
+    pDdiTable->pfnMemUnmap = ur_sanitizer_layer::urEnqueueMemUnmap;
 
     return result;
 }
@@ -1386,8 +1481,18 @@ ur_result_t context_t::init(ur_dditable_t *dditable,
     }
 
     if (UR_RESULT_SUCCESS == result) {
+        result = ur_sanitizer_layer::urGetKernelProcAddrTable(
+            UR_API_VERSION_CURRENT, &dditable->Kernel);
+    }
+
+    if (UR_RESULT_SUCCESS == result) {
         result = ur_sanitizer_layer::urGetUSMProcAddrTable(
             UR_API_VERSION_CURRENT, &dditable->USM);
+    }
+
+    if (UR_RESULT_SUCCESS == result) {
+        result = ur_sanitizer_layer::urGetCommandBufferExpProcAddrTable(
+            UR_API_VERSION_CURRENT, &dditable->CommandBufferExp);
     }
 
     return result;

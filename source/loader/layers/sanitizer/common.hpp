@@ -91,6 +91,7 @@ bool IsInASanContext();
 
 ur_context_handle_t getContext(ur_kernel_handle_t Kernel);
 ur_context_handle_t getContext(ur_queue_handle_t Queue);
+ur_context_handle_t getContext(ur_program_handle_t Program);
 ur_device_handle_t getDevice(ur_queue_handle_t Queue);
 ur_program_handle_t getProgram(ur_kernel_handle_t Kernel);
 

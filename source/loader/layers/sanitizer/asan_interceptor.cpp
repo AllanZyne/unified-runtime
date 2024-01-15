@@ -199,6 +199,12 @@ ur_result_t enqueueMemSetShadow(ur_queue_handle_t Queue, uptr Ptr, uptr Size,
 /// ref: https://github.com/google/sanitizers/wiki/AddressSanitizerAlgorithm#mapping
 ur_result_t enqueueAllocInfo(ur_queue_handle_t Queue, const AllocInfo *AI,
                              ur_event_handle_t &LastEvent) {
+    context.logger.debug("enqueueAllocInfo(AllocBegin: {},  AllocSize: {}, "
+                         "UserBegin: {}, UserEnd: {}, Type: {})",
+                         (void *)AI->AllocBegin, AI->AllocSize,
+                         (void *)AI->UserBegin, (void *)AI->UserEnd,
+                         (int)AI->Type);
+
     // Init zero
     UR_CALL(enqueueMemSetShadow(Queue, AI->AllocBegin, AI->AllocSize, 0,
                                 LastEvent, &LastEvent));
@@ -246,42 +252,6 @@ ur_result_t enqueueAllocInfo(ur_queue_handle_t Queue, const AllocInfo *AI,
 }
 
 } // namespace
-
-ur_context_handle_t getContext(ur_kernel_handle_t Kernel) {
-    ur_context_handle_t Context;
-    [[maybe_unused]] auto Result = context.urDdiTable.Kernel.pfnGetInfo(
-        Kernel, UR_KERNEL_INFO_CONTEXT, sizeof(ur_context_handle_t), &Context,
-        nullptr);
-    assert(Result == UR_RESULT_SUCCESS);
-    return Context;
-}
-
-ur_context_handle_t getContext(ur_queue_handle_t Queue) {
-    ur_context_handle_t Context;
-    [[maybe_unused]] auto Result = context.urDdiTable.Queue.pfnGetInfo(
-        Queue, UR_QUEUE_INFO_CONTEXT, sizeof(ur_context_handle_t), &Context,
-        nullptr);
-    assert(Result == UR_RESULT_SUCCESS);
-    return Context;
-}
-
-ur_device_handle_t getDevice(ur_queue_handle_t Queue) {
-    ur_device_handle_t Device;
-    [[maybe_unused]] auto Result = context.urDdiTable.Queue.pfnGetInfo(
-        Queue, UR_QUEUE_INFO_DEVICE, sizeof(ur_device_handle_t), &Device,
-        nullptr);
-    assert(Result == UR_RESULT_SUCCESS);
-    return Device;
-}
-
-ur_program_handle_t getProgram(ur_kernel_handle_t Kernel) {
-    ur_program_handle_t Program;
-    [[maybe_unused]] auto Result = context.urDdiTable.Kernel.pfnGetInfo(
-        Kernel, UR_KERNEL_INFO_PROGRAM, sizeof(ur_program_handle_t), &Program,
-        nullptr);
-    assert(Result == UR_RESULT_SUCCESS);
-    return Program;
-}
 
 AllocInfo MemBuffer::getAllocInfo([[maybe_unused]] ur_device_handle_t Device) {
     ur_native_handle_t Handle;
@@ -555,9 +525,9 @@ ur_result_t SanitizerInterceptor::updateShadowMemory(ur_kernel_handle_t Kernel,
     }
     DeviceInfo->AllocInfos.clear();
 
-    for (auto &Pair : KernelInfo->Arguments) {
-        if (auto Buffer = Pair.second.lock()) {
-            auto AI = Buffer->getAllocInfo(Device);
+    for (auto &Pair : KernelInfo->ArgumentsMap) {
+        if (auto MemBuffer = Pair.second.lock()) {
+            auto AI = MemBuffer->getAllocInfo(Device);
             UR_CALL(enqueueAllocInfo(Queue, &AI, LastEvent));
         }
     }
