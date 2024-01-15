@@ -477,6 +477,7 @@ __urdlllocal ur_result_t UR_APICALL urMemBufferPartition(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
+    // TODO: Boundary check?
     ur_result_t result =
         pfnBufferPartition(context.interceptor->getRealBuffer(hBuffer), flags,
                            bufferCreateType, pRegion, phMem);
