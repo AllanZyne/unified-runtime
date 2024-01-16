@@ -32,7 +32,7 @@ struct USMAllocInfo {
     USMMemoryType Type;
 };
 
-enum class DeviceType { UNKNOWN, CPU, GPU_PVC, GPU_DG2 };
+enum class DeviceType : uint32_t { UNKNOWN, CPU, GPU_PVC, GPU_DG2 };
 
 struct DeviceInfo {
     DeviceType Type;
@@ -158,6 +158,7 @@ class SanitizerInterceptor {
     ur_shared_mutex m_ContextMapMutex;
 
     bool m_IsInASanContext;
+    uint32_t m_DebugLevel;
 };
 
 } // namespace ur_sanitizer_layer
