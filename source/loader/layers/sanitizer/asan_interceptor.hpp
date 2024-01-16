@@ -218,7 +218,6 @@ class SanitizerInterceptor {
     ur_shared_mutex m_MemBufferMapMutex;
 
     bool m_IsInASanContext;
-    uint32_t m_DebugLevel;
 };
 
 } // namespace ur_sanitizer_layer

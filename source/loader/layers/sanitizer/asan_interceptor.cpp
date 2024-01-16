@@ -263,18 +263,7 @@ AllocInfo MemBuffer::getAllocInfo([[maybe_unused]] ur_device_handle_t Device) {
 }
 
 SanitizerInterceptor::SanitizerInterceptor()
-    : m_IsInASanContext(IsInASanContext()), m_DebugLevel(0) {
-    auto map = getenv_to_map("UR_LOG_SANITIZER");
-    if (map.has_value()) {
-        auto kv = map->find("level");
-        if (kv != map->end()) {
-            const auto value = kv->second.front();
-            if (value == "debug") {
-                m_DebugLevel = 1;
-            }
-        }
-    }
-}
+    : m_IsInASanContext(IsInASanContext()) {}
 
 /// The memory chunk allocated from the underlying allocator looks like this:
 /// L L L L L L U U U U U U R R
