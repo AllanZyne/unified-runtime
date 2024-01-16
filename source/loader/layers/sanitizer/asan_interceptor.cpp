@@ -30,7 +30,7 @@ const auto kSPIR_ShadowGlobalEnd = "__spirv_AsanShadowGlobalEnd";
 const auto kSPIR_ShadowLocalStart = "__spirv_AsanShadowLocalStart";
 const auto kSPIR_ShadowLocalEnd = "__spirv_AsanShadowLocalEnd";
 
-constexpr auto kSPIR_SanitizerReportMem = "__spirv_AsanSanitizerReportMem";
+const auto kSPIR_SanitizerReportMem = "__spirv_AsanSanitizerReportMem";
 
 const auto kSPIR_DeviceType = "__spirv_AsanDeviceType";
 const auto kSPIR_DebugLevel = "__spirv_AsanDebugLevel";
