@@ -358,7 +358,31 @@ __urdlllocal ur_result_t UR_APICALL urMemBufferCreate(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
-    context.logger.debug("==== urMemBufferCreate");
+    switch (flags) {
+    case UR_MEM_FLAG_READ_WRITE:
+        context.logger.debug("==== urMemBufferCreate: READ_WRITE");
+        break;
+    case UR_MEM_FLAG_WRITE_ONLY:
+        context.logger.debug("==== urMemBufferCreate: WRITE");
+        break;
+    case UR_MEM_FLAG_READ_ONLY:
+        context.logger.debug("==== urMemBufferCreate: READ");
+        break;
+    case UR_MEM_FLAG_USE_HOST_POINTER:
+        context.logger.debug("==== urMemBufferCreate: USE_HOST_POINTER {}",
+                             pProperties->pHost);
+        break;
+    case UR_MEM_FLAG_ALLOC_HOST_POINTER:
+        context.logger.debug("==== urMemBufferCreate: ALLOC_HOST_POINTER",
+                             pProperties->pHost);
+        break;
+    case UR_MEM_FLAG_ALLOC_COPY_HOST_POINTER:
+        context.logger.debug("==== urMemBufferCreate: ALLOC_COPY_HOST_POINTER",
+                             pProperties->pHost);
+        break;
+    default:
+        context.logger.debug("==== urMemBufferCreate");
+    }
 
     auto Alignment = ASAN_SHADOW_GRANULARITY;
     uptr RZLog = ComputeRZLog(size);
@@ -456,7 +480,7 @@ __urdlllocal ur_result_t UR_APICALL urMemRelease(
     if (auto pMemBuffer = context.interceptor->getMemBuffer(hMem)) {
         result = pfnRelease(pMemBuffer->Buffer);
         if (result == UR_RESULT_SUCCESS) {
-            context.interceptor->eraseMemBuffer(pMemBuffer->Buffer);
+            context.interceptor->eraseMemBuffer(hMem);
         }
     } else {
         result = pfnRelease(hMem);
@@ -539,6 +563,8 @@ __urdlllocal ur_result_t UR_APICALL urKernelSetArgMemObj(
             auto KernelInfo = ContextInfo->getKernelInfo(hKernel);
             std::scoped_lock<ur_shared_mutex> Guard(KernelInfo->Mutex);
             KernelInfo->ArgumentsMap.emplace(argIndex, pMemBuffer);
+            context.logger.debug("AddMemArgs({}, {})", argIndex,
+                                 (void *)pMemBuffer.get());
         }
     } else {
         result = pfnSetArgMemObj(hKernel, argIndex, pProperties,
@@ -608,6 +634,8 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferWrite(
     if (nullptr == pfnMemBufferWrite) {
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
+
+    context.logger.debug("==== urEnqueueMemBufferWrite");
 
     ur_result_t result = pfnMemBufferWrite(
         hQueue, context.interceptor->getMemHandle(hBuffer), blockingWrite,
@@ -1493,6 +1521,11 @@ ur_result_t context_t::init(ur_dditable_t *dditable,
     if (UR_RESULT_SUCCESS == result) {
         result = ur_sanitizer_layer::urGetCommandBufferExpProcAddrTable(
             UR_API_VERSION_CURRENT, &dditable->CommandBufferExp);
+    }
+
+    if (UR_RESULT_SUCCESS == result) {
+        result = ur_sanitizer_layer::urGetMemProcAddrTable(
+            UR_API_VERSION_CURRENT, &dditable->Mem);
     }
 
     return result;

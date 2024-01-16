@@ -29,6 +29,8 @@ enum class AllocType {
     DEVICE_GLOBAL
 };
 
+enum class DeviceType : uint32_t { UNKNOWN, CPU, GPU_PVC, GPU_DG2 };
+
 struct AllocInfo {
     uptr AllocBegin;
     uptr UserBegin;
@@ -45,7 +47,16 @@ struct MemBuffer {
     AllocInfo getAllocInfo(ur_device_handle_t Device);
 };
 
-enum class DeviceType { UNKNOWN, CPU, GPU_PVC, GPU_DG2 };
+// struct MemBuffer2 {
+//     // urMemBufferCreateWithNativeHandle
+//     // void* RawMem;
+//     std::unordered_map<DeviceType, void *> RawMem;
+//     std::unordered_map<DeviceType, ur_mem_handle_t> Buffer;
+//     size_t Size;
+//     size_t SizeWithRZ;
+
+//     AllocInfo getAllocInfo(ur_device_handle_t Device);
+// };
 
 struct DeviceInfo {
     DeviceType Type;
@@ -153,29 +164,30 @@ class SanitizerInterceptor {
     void insertMemBuffer(std::shared_ptr<MemBuffer> MemBuffer) {
         std::scoped_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
         assert(m_MemBufferMap.find(MemBuffer->Buffer) == m_MemBufferMap.end());
-        m_MemBufferMap.emplace(MemBuffer->Buffer, MemBuffer);
+        m_MemBufferMap.emplace(
+            reinterpret_cast<ur_mem_handle_t>(MemBuffer.get()), MemBuffer);
     }
 
-    void eraseMemBuffer(ur_mem_handle_t MemBuffer) {
+    void eraseMemBuffer(ur_mem_handle_t MemHandle) {
         std::scoped_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
-        assert(m_MemBufferMap.find(MemBuffer) != m_MemBufferMap.end());
-        m_MemBufferMap.erase(MemBuffer);
+        assert(m_MemBufferMap.find(MemHandle) != m_MemBufferMap.end());
+        m_MemBufferMap.erase(MemHandle);
     }
 
-    std::shared_ptr<MemBuffer> getMemBuffer(ur_mem_handle_t MemBuffer) {
+    std::shared_ptr<MemBuffer> getMemBuffer(ur_mem_handle_t MemHandle) {
         std::shared_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
-        if (m_MemBufferMap.count(MemBuffer)) {
-            return m_MemBufferMap.at(MemBuffer);
+        if (m_MemBufferMap.count(MemHandle)) {
+            return m_MemBufferMap.at(MemHandle);
         }
         return nullptr;
     }
 
-    ur_mem_handle_t getMemHandle(ur_mem_handle_t MemBuffer) {
+    ur_mem_handle_t getMemHandle(ur_mem_handle_t MemHandle) {
         std::shared_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
-        if (m_MemBufferMap.count(MemBuffer)) {
-            return m_MemBufferMap.at(MemBuffer).get()->Buffer;
+        if (m_MemBufferMap.count(MemHandle)) {
+            return m_MemBufferMap.at(MemHandle).get()->Buffer;
         }
-        return MemBuffer;
+        return MemHandle;
     }
 
     std::shared_ptr<ContextInfo> getContextInfo(ur_context_handle_t Context) {
@@ -206,6 +218,7 @@ class SanitizerInterceptor {
     ur_shared_mutex m_MemBufferMapMutex;
 
     bool m_IsInASanContext;
+    uint32_t m_DebugLevel;
 };
 
 } // namespace ur_sanitizer_layer
