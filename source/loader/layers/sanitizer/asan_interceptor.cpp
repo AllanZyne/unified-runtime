@@ -416,7 +416,7 @@ void SanitizerInterceptor::postLaunchKernel(ur_kernel_handle_t Kernel,
     // to host, but it's okay that it isn't defined
     // FIXME: We must use block operation here
     auto Result = context.urDdiTable.Enqueue.pfnDeviceGlobalVariableRead(
-        Queue, Program, kSPIR_SanitizerReportMem, true,
+        Queue, Program, kSPIR_DeviceSanitizerReportMem, true,
         sizeof(LaunchInfo.SPIR_DeviceSanitizerReportMem), 0,
         &LaunchInfo.SPIR_DeviceSanitizerReportMem, 1, &Event, &ReadEvent);
 
