@@ -20,20 +20,21 @@ namespace {
 
 // These magic values are written to shadow for better error
 // reporting.
-constexpr int kUsmDeviceRedzoneMagic = (char)0x81;
-constexpr int kUsmHostRedzoneMagic = (char)0x82;
-constexpr int kUsmSharedRedzoneMagic = (char)0x83;
-constexpr int kMemBufferRedzoneMagic = (char)0x84;
+const int kUsmDeviceRedzoneMagic = (char)0x81;
+const int kUsmHostRedzoneMagic = (char)0x82;
+const int kUsmSharedRedzoneMagic = (char)0x83;
+const int kMemBufferRedzoneMagic = (char)0x84;
+const int kSharedLocalRedzoneMagic = (char)0xa1;
+const int kUnkownRedzoneMagic = (char)0x8F;
 
-constexpr auto kSPIR_ShadowGlobalStart = "__spirv_AsanShadowGlobalStart";
-constexpr auto kSPIR_ShadowGlobalEnd = "__spirv_AsanShadowGlobalEnd";
-constexpr auto kSPIR_ShadowLocalStart = "__spirv_AsanShadowLocalStart";
-constexpr auto kSPIR_ShadowLocalEnd = "__spirv_AsanShadowLocalEnd";
+const auto kSPIR_AsanShadowMemoryGlobalStart = "__AsanShadowMemoryGlobalStart";
+const auto kSPIR_AsanShadowMemoryGlobalEnd = "__AsanShadowMemoryGlobalEnd";
+const auto kSPIR_AsanShadowMemoryLocalStart = "__AsanShadowMemoryLocalStart";
+const auto kSPIR_AsanShadowMemoryLocalEnd = "__AsanShadowMemoryLocalEnd";
 
-constexpr auto kSPIR_SanitizerReportMem = "__spirv_AsanSanitizerReportMem";
+constexpr auto kSPIR_DeviceSanitizerReportMem = "__DeviceSanitizerReportMem";
 
-constexpr auto kSPIR_DeviceType = "__spirv_AsanDeviceType";
-constexpr auto kSPIR_DebugLevel = "__spirv_AsanDebugLevel";
+const auto kSPIR_DeviceType = "__DeviceType";
 
 uptr MemToShadow_CPU(uptr USM_SHADOW_BASE, uptr UPtr) {
     return USM_SHADOW_BASE + (UPtr >> 3);
@@ -641,16 +642,15 @@ ur_result_t SanitizerInterceptor::prepareLaunch(ur_queue_handle_t Queue,
 
     do {
         // Set global variable to program
-        auto EnqueueWriteGlobal = [&](const char *Name, const void *Value,
-                                      size_t Size) {
+        auto EnqueueWriteGlobal = [&](const char *Name, const void *Value) {
             ur_event_handle_t NewEvent{};
             uint32_t NumEvents = LastEvent ? 1 : 0;
             const ur_event_handle_t *EventsList =
                 LastEvent ? &LastEvent : nullptr;
             auto Result =
                 context.urDdiTable.Enqueue.pfnDeviceGlobalVariableWrite(
-                    Queue, Program, Name, true, Size, 0, Value, NumEvents,
-                    EventsList, &NewEvent);
+                    Queue, Program, Name, true, sizeof(uptr), 0, Value,
+                    NumEvents, EventsList, &NewEvent);
             if (Result != UR_RESULT_SUCCESS) {
                 context.logger.warning("Device Global[{}] Write Failed: {}",
                                        Name, Result);
@@ -660,18 +660,14 @@ ur_result_t SanitizerInterceptor::prepareLaunch(ur_queue_handle_t Queue,
             return true;
         };
 
-        EnqueueWriteGlobal(kSPIR_DebugLevel, &m_DebugLevel,
-                           sizeof(m_DebugLevel));
-
         // Write shadow memory offset for global memory
-        EnqueueWriteGlobal(kSPIR_ShadowGlobalStart, &DeviceInfo->ShadowOffset,
-                           sizeof(DeviceInfo->ShadowOffset));
-        EnqueueWriteGlobal(kSPIR_ShadowGlobalEnd, &DeviceInfo->ShadowOffsetEnd,
-                           sizeof(DeviceInfo->ShadowOffsetEnd));
+        EnqueueWriteGlobal(kSPIR_AsanShadowMemoryGlobalStart,
+                           &DeviceInfo->ShadowOffset);
+        EnqueueWriteGlobal(kSPIR_AsanShadowMemoryGlobalEnd,
+                           &DeviceInfo->ShadowOffsetEnd);
 
         // Write device type
-        EnqueueWriteGlobal(kSPIR_DeviceType, &DeviceInfo->Type,
-                           sizeof(DeviceInfo->Type));
+        EnqueueWriteGlobal(kSPIR_DeviceType, &DeviceInfo->Type);
 
         if (DeviceInfo->Type == DeviceType::CPU) {
             break;
@@ -701,12 +697,10 @@ ur_result_t SanitizerInterceptor::prepareLaunch(ur_queue_handle_t Queue,
         LaunchInfo.LocalShadowOffsetEnd =
             LaunchInfo.LocalShadowOffset + LocalShadowMemorySize - 1;
 
-        EnqueueWriteGlobal(kSPIR_ShadowLocalStart,
-                           &LaunchInfo.LocalShadowOffset,
-                           sizeof(LaunchInfo.LocalShadowOffset));
-        EnqueueWriteGlobal(kSPIR_ShadowLocalEnd,
-                           &LaunchInfo.LocalShadowOffsetEnd,
-                           sizeof(LaunchInfo.LocalShadowOffsetEnd));
+        EnqueueWriteGlobal(kSPIR_AsanShadowMemoryLocalStart,
+                           &LaunchInfo.LocalShadowOffset);
+        EnqueueWriteGlobal(kSPIR_AsanShadowMemoryLocalEnd,
+                           &LaunchInfo.LocalShadowOffsetEnd);
 
         {
             ur_event_handle_t NewEvent{};
