@@ -101,10 +101,11 @@ std::string getKernelName(ur_kernel_handle_t Kernel) {
 } // namespace
 
 SanitizerInterceptor::SanitizerInterceptor()
-    : m_IsInASanContext(IsInASanContext()), m_ShadowMemInited(false) {}
+    : m_IsInASanContext(IsInASanContext()),
+      m_ShadowMemInited(m_IsInASanContext) {}
 
 SanitizerInterceptor::~SanitizerInterceptor() {
-    if (m_ShadowMemInited && !DestroyShadowMem()) {
+    if (!m_IsInASanContext && m_ShadowMemInited && !DestroyShadowMem()) {
         context.logger.error("Failed to destroy shadow memory");
     }
 }
@@ -286,9 +287,6 @@ void SanitizerInterceptor::postLaunchKernel(ur_kernel_handle_t Kernel,
             AH->LID0, AH->LID1, AH->LID2, AH->GID0, AH->GID1, AH->GID2);
         context.logger.always("  #0 {} {}:{}", Func, File, AH->Line);
         if (!AH->IsRecover) {
-            if (m_ShadowMemInited && !DestroyShadowMem()) {
-                context.logger.error("Failed to destory shadow memory");
-            }
             exit(1);
         }
     }
@@ -299,16 +297,15 @@ ur_result_t SanitizerInterceptor::allocShadowMemory(
     if (DeviceInfo->Type == DeviceType::CPU) {
         if (!m_IsInASanContext) {
             static std::once_flag OnceFlag;
-            bool Result;
+            bool Result = true;
             std::call_once(OnceFlag, [&]() {
-                Result = SetupShadowMem();
+                Result = m_ShadowMemInited = SetupShadowMem();
             });
 
             if (!Result) {
                 context.logger.error("Failed to allocate shadow memory");
                 return UR_RESULT_ERROR_OUT_OF_RESOURCES;
             }
-            m_ShadowMemInited = true;
         }
 
         DeviceInfo->ShadowOffset = LOW_SHADOW_BEGIN;
