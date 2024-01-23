@@ -10,9 +10,8 @@
  *
  */
 
-#pragma once
-
 #include "ur_sanitizer_layer.hpp"
+#include "common.hpp"
 
 #include "ur/ur.hpp"
 #include "ur_ddi.h"
@@ -64,6 +63,11 @@ ur_program_handle_t getProgram(ur_kernel_handle_t Kernel) {
         nullptr);
     assert(Result == UR_RESULT_SUCCESS);
     return Program;
+}
+
+void UrUSMFree::operator()(void* p) const {
+    [[maybe_unused]] auto Res = context.urDdiTable.USM.pfnFree(m_Context, p);
+    assert(Res == UR_RESULT_SUCCESS);
 }
 
 } // namespace ur_sanitizer_layer

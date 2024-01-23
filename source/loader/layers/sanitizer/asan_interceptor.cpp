@@ -73,6 +73,14 @@ std::string getKernelName(ur_kernel_handle_t Kernel) {
     return std::string(KernelNameBuf.data(), KernelNameSize - 1);
 }
 
+size_t getKernelNumArgs(ur_kernel_handle_t Kernel) {
+    size_t NumArgs = 0;
+    [[maybe_unused]] auto Res = context.urDdiTable.Kernel.pfnGetInfo(
+        Kernel, UR_KERNEL_INFO_NUM_ARGS, sizeof(NumArgs), &NumArgs, nullptr);
+    assert(Res == UR_RESULT_SUCCESS);
+    return NumArgs;
+}
+
 ur_result_t enqueueMemSetShadow(ur_queue_handle_t Queue, uptr Ptr, uptr Size,
                                 u8 Value, ur_event_handle_t DepEvent,
                                 ur_event_handle_t *OutEvent) {
@@ -384,11 +392,14 @@ ur_result_t SanitizerInterceptor::releaseMemory(ur_context_handle_t Context,
                                           (void *)AllocInfo->AllocBegin);
 }
 
-ur_result_t SanitizerInterceptor::preLaunchKernel(ur_kernel_handle_t Kernel,
-                                                  ur_queue_handle_t Queue,
-                                                  ur_event_handle_t &Event,
-                                                  LaunchInfo &LaunchInfo,
-                                                  uint32_t numWorkgroup) {
+ur_result_t SanitizerInterceptor::preLaunchKernel(
+    ur_kernel_handle_t Kernel, ur_queue_handle_t Queue,
+    ur_event_handle_t &Event,
+    std::unique_ptr<LaunchInfo, UrUSMFree> &LaunchInfo, uint32_t numWorkgroup) {
+
+    context.logger.debug("Kernel: {}\nArgs Size: {}", getKernelName(Kernel),
+                         getKernelNumArgs(Kernel));
+
     UR_CALL(prepareLaunch(Queue, Kernel, LaunchInfo, numWorkgroup));
 
     UR_CALL(updateShadowMemory(Kernel, Queue));
@@ -405,10 +416,10 @@ ur_result_t SanitizerInterceptor::preLaunchKernel(ur_kernel_handle_t Kernel,
     return UR_RESULT_SUCCESS;
 }
 
-void SanitizerInterceptor::postLaunchKernel(ur_kernel_handle_t Kernel,
-                                            ur_queue_handle_t Queue,
-                                            ur_event_handle_t &Event,
-                                            LaunchInfo &LaunchInfo) {
+void SanitizerInterceptor::postLaunchKernel(
+    ur_kernel_handle_t Kernel, ur_queue_handle_t Queue,
+    ur_event_handle_t &Event,
+    std::unique_ptr<LaunchInfo, UrUSMFree> &LaunchInfo) {
     auto Program = getProgram(Kernel);
     ur_event_handle_t ReadEvent{};
 
@@ -417,13 +428,13 @@ void SanitizerInterceptor::postLaunchKernel(ur_kernel_handle_t Kernel,
     // FIXME: We must use block operation here
     auto Result = context.urDdiTable.Enqueue.pfnDeviceGlobalVariableRead(
         Queue, Program, kSPIR_DeviceSanitizerReportMem, true,
-        sizeof(LaunchInfo.SPIR_DeviceSanitizerReportMem), 0,
-        &LaunchInfo.SPIR_DeviceSanitizerReportMem, 1, &Event, &ReadEvent);
+        sizeof(LaunchInfo->SPIR_DeviceSanitizerReportMem), 0,
+        &LaunchInfo->SPIR_DeviceSanitizerReportMem, 1, &Event, &ReadEvent);
 
     if (Result == UR_RESULT_SUCCESS) {
         Event = ReadEvent;
 
-        auto AH = &LaunchInfo.SPIR_DeviceSanitizerReportMem;
+        auto AH = &LaunchInfo->SPIR_DeviceSanitizerReportMem;
         if (!AH->Flag) {
             return;
         }
@@ -612,15 +623,14 @@ ur_result_t SanitizerInterceptor::eraseQueue(ur_context_handle_t Context,
     return UR_RESULT_SUCCESS;
 }
 
-ur_result_t SanitizerInterceptor::prepareLaunch(ur_queue_handle_t Queue,
-                                                ur_kernel_handle_t Kernel,
-                                                LaunchInfo &LaunchInfo,
-                                                uint32_t numWorkgroup) {
+ur_result_t SanitizerInterceptor::prepareLaunch(
+    ur_queue_handle_t Queue, ur_kernel_handle_t Kernel,
+    std::unique_ptr<LaunchInfo, UrUSMFree> &LaunchInfo, uint32_t numWorkgroup) {
     auto Context = getContext(Queue);
     auto Device = getDevice(Queue);
     auto Program = getProgram(Kernel);
 
-    LaunchInfo.Context = Context;
+    LaunchInfo->Context = Context;
 
     auto ContextInfo = getContextInfo(Context);
     auto DeviceInfo = ContextInfo->getDeviceInfo(Device);
@@ -662,6 +672,11 @@ ur_result_t SanitizerInterceptor::prepareLaunch(ur_queue_handle_t Queue,
             break;
         }
 
+        auto NumArgs = getKernelNumArgs(Kernel);
+        if (!NumArgs) {
+            break;
+        }
+
         // Write shadow memory offset for local memory
         auto LocalMemorySize = getLocalMemorySize(Device);
         auto LocalShadowMemorySize =
@@ -675,7 +690,7 @@ ur_result_t SanitizerInterceptor::prepareLaunch(ur_queue_handle_t Queue,
         ur_usm_desc_t Desc{UR_STRUCTURE_TYPE_USM_HOST_DESC, nullptr, 0, 0};
         auto Result = context.urDdiTable.USM.pfnDeviceAlloc(
             Context, Device, &Desc, nullptr, LocalShadowMemorySize,
-            (void **)&LaunchInfo.LocalShadowOffset);
+            (void **)&LaunchInfo->LocalShadowOffset);
         if (Result != UR_RESULT_SUCCESS) {
             context.logger.error(
                 "Failed to allocate shadow memory for local memory: {}",
@@ -683,13 +698,8 @@ ur_result_t SanitizerInterceptor::prepareLaunch(ur_queue_handle_t Queue,
             context.logger.error("Maybe the number of workgroup too large");
             return Result;
         }
-        LaunchInfo.LocalShadowOffsetEnd =
-            LaunchInfo.LocalShadowOffset + LocalShadowMemorySize - 1;
-
-        EnqueueWriteGlobal(kSPIR_AsanShadowMemoryLocalStart,
-                           &LaunchInfo.LocalShadowOffset);
-        EnqueueWriteGlobal(kSPIR_AsanShadowMemoryLocalEnd,
-                           &LaunchInfo.LocalShadowOffsetEnd);
+        LaunchInfo->LocalShadowOffsetEnd =
+            LaunchInfo->LocalShadowOffset + LocalShadowMemorySize - 1;
 
         {
             ur_event_handle_t NewEvent{};
@@ -699,7 +709,7 @@ ur_result_t SanitizerInterceptor::prepareLaunch(ur_queue_handle_t Queue,
             const char Pattern[] = {0};
 
             auto URes = context.urDdiTable.Enqueue.pfnUSMFill(
-                Queue, (void *)LaunchInfo.LocalShadowOffset, 1, Pattern,
+                Queue, (void *)LaunchInfo->LocalShadowOffset, 1, Pattern,
                 LocalShadowMemorySize, NumEvents, EventsList, &NewEvent);
             if (URes != UR_RESULT_SUCCESS) {
                 context.logger.error("urEnqueueUSMFill(): {}", URes);
@@ -708,9 +718,15 @@ ur_result_t SanitizerInterceptor::prepareLaunch(ur_queue_handle_t Queue,
             LastEvent = NewEvent;
         }
 
+        // Set last argument
+        auto addr = LaunchInfo.get();
+        [[maybe_unused]] auto Res = context.urDdiTable.Kernel.pfnSetArgValue(
+            Kernel, NumArgs - 1, sizeof(void *), nullptr, &addr);
+        assert(Res == UR_RESULT_SUCCESS);
+
         context.logger.info("ShadowMemory(Local, {} - {})",
-                            (void *)LaunchInfo.LocalShadowOffset,
-                            (void *)LaunchInfo.LocalShadowOffsetEnd);
+                            (void *)LaunchInfo->LocalShadowOffset,
+                            (void *)LaunchInfo->LocalShadowOffsetEnd);
     } while (false);
 
     QueueInfo->LastEvent = LastEvent;

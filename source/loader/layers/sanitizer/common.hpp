@@ -95,4 +95,13 @@ ur_context_handle_t getContext(ur_program_handle_t Program);
 ur_device_handle_t getDevice(ur_queue_handle_t Queue);
 ur_program_handle_t getProgram(ur_kernel_handle_t Kernel);
 
+class UrUSMFree {
+public:
+    UrUSMFree(ur_context_handle_t Context) : m_Context(Context) {}
+    void operator()(void* p) const;
+
+private:
+    ur_context_handle_t m_Context;
+};
+
 } // namespace ur_sanitizer_layer

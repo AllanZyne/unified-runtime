@@ -195,14 +195,22 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueKernelLaunch(
 
     context.logger.debug("==== urEnqueueKernelLaunch");
 
-    LaunchInfo LaunchInfo;
+    auto hContext = getContext(hQueue);
+    LaunchInfo *pLaunchInfoRaw = nullptr;
+    UR_CALL(context.urDdiTable.USM.pfnHostAlloc(hContext, nullptr, nullptr,
+                                                sizeof(LaunchInfo),
+                                                (void **)&pLaunchInfoRaw));
+    context.logger.debug("LaunchInfo: {}", (void *)pLaunchInfoRaw);
+    std::unique_ptr<LaunchInfo, UrUSMFree> pLaunchInfo(pLaunchInfoRaw,
+                                                       UrUSMFree(hContext));
+
     const size_t *pUserLocalWorkSize = pLocalWorkSize;
     if (!pUserLocalWorkSize) {
-        pUserLocalWorkSize = LaunchInfo.LocalWorkSize;
+        pUserLocalWorkSize = pLaunchInfo->LocalWorkSize;
         UR_CALL(
             context.urDdiTable.KernelExp.pfnGetKernelSuggestedLocalWorkSizeExp(
                 hQueue, hKernel, workDim, pGlobalWorkOffset, pGlobalWorkSize,
-                LaunchInfo.LocalWorkSize));
+                pLaunchInfo->LocalWorkSize));
     }
 
     uint32_t numWork = 1;
@@ -219,7 +227,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueKernelLaunch(
     // preLaunchKernel must append to num_events_in_wait_list, not prepend
     ur_event_handle_t hPreEvent{};
     UR_CALL(context.interceptor->preLaunchKernel(hKernel, hQueue, hPreEvent,
-                                                 LaunchInfo, numWork));
+                                                 pLaunchInfo, numWork));
     if (hPreEvent) {
         hEvents.push_back(hPreEvent);
     }
@@ -231,7 +239,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueKernelLaunch(
 
     if (result == UR_RESULT_SUCCESS) {
         context.interceptor->postLaunchKernel(hKernel, hQueue, hEvent,
-                                              LaunchInfo);
+                                              pLaunchInfo);
     }
 
     if (phEvent) {
@@ -551,7 +559,8 @@ __urdlllocal ur_result_t UR_APICALL urKernelSetArgMemObj(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
-    context.logger.debug("==== urKernelSetArgMemObj");
+    context.logger.debug("==== urKernelSetArgMemObj: {} {}", argIndex,
+                         (void *)hArgValue);
 
     ur_result_t result;
     if (auto pMemBuffer = context.interceptor->getMemBuffer(hArgValue)) {

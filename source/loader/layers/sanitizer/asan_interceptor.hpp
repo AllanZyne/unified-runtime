@@ -118,17 +118,16 @@ struct ContextInfo {
     std::map<uptr, std::shared_ptr<AllocInfo>> AllocatedUSMMap;
 };
 
-struct LaunchInfo {
-    uptr LocalShadowOffset;
-    uptr LocalShadowOffsetEnd;
-    ur_context_handle_t Context;
-
+struct LaunchInfoBase {
+    uptr LocalShadowOffset = 0;
+    uptr LocalShadowOffsetEnd = 0;
     DeviceSanitizerReport SPIR_DeviceSanitizerReportMem;
+};
 
+struct LaunchInfo : LaunchInfoBase {
+    ur_context_handle_t Context = nullptr;
     size_t LocalWorkSize[3];
 
-    LaunchInfo()
-        : LocalShadowOffset(0), LocalShadowOffsetEnd(0), Context(nullptr) {}
     ~LaunchInfo();
 };
 
@@ -143,12 +142,14 @@ class SanitizerInterceptor {
                                void **ResultPtr, AllocType Type);
     ur_result_t releaseMemory(ur_context_handle_t Context, void *Ptr);
 
-    ur_result_t preLaunchKernel(ur_kernel_handle_t Kernel,
-                                ur_queue_handle_t Queue,
-                                ur_event_handle_t &Event,
-                                LaunchInfo &LaunchInfo, uint32_t numWorkgroup);
+    ur_result_t
+    preLaunchKernel(ur_kernel_handle_t Kernel, ur_queue_handle_t Queue,
+                    ur_event_handle_t &Event,
+                    std::unique_ptr<LaunchInfo, UrUSMFree> &LaunchInfo,
+                    uint32_t numWorkgroup);
     void postLaunchKernel(ur_kernel_handle_t Kernel, ur_queue_handle_t Queue,
-                          ur_event_handle_t &Event, LaunchInfo &LaunchInfo);
+                          ur_event_handle_t &Event,
+                          std::unique_ptr<LaunchInfo, UrUSMFree> &LaunchInfo);
 
     ur_result_t insertContext(ur_context_handle_t Context);
     ur_result_t eraseContext(ur_context_handle_t Context);
@@ -201,9 +202,10 @@ class SanitizerInterceptor {
                                    ur_queue_handle_t Queue);
 
     /// Initialize Global Variables & Kernel Name at first Launch
-    ur_result_t prepareLaunch(ur_queue_handle_t Queue,
-                              ur_kernel_handle_t Kernel, LaunchInfo &LaunchInfo,
-                              uint32_t numWorkgroup);
+    ur_result_t
+    prepareLaunch(ur_queue_handle_t Queue, ur_kernel_handle_t Kernel,
+                  std::unique_ptr<LaunchInfo, UrUSMFree> &LaunchInfo,
+                  uint32_t numWorkgroup);
 
     ur_result_t allocShadowMemory(ur_context_handle_t Context,
                                   std::shared_ptr<DeviceInfo> &DeviceInfo);
