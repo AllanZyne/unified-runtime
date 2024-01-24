@@ -673,6 +673,7 @@ ur_result_t SanitizerInterceptor::prepareLaunch(
         }
 
         auto NumArgs = getKernelNumArgs(Kernel);
+        context.logger.debug("Kernel Args: {}", NumArgs);
         if (!NumArgs) {
             break;
         }
