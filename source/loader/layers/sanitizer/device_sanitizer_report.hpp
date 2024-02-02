@@ -32,6 +32,7 @@ enum class DeviceSanitizerMemoryType : int32_t {
     LOCAL,
     PRIVATE,
     MEM_BUFFER,
+    DEVICE_GLOBAL,
 };
 
 struct DeviceSanitizerReport {
@@ -72,6 +73,8 @@ inline const char *DeviceSanitizerFormat(DeviceSanitizerMemoryType MemoryType) {
         return "Private Memory";
     case DeviceSanitizerMemoryType::MEM_BUFFER:
         return "Memory Buffer";
+    case DeviceSanitizerMemoryType::DEVICE_GLOBAL:
+        return "Deivce Global";
     default:
         return "Unknown Memory";
     }

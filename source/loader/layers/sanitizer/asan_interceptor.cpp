@@ -24,6 +24,7 @@ constexpr int kUsmDeviceRedzoneMagic = (char)0x81;
 constexpr int kUsmHostRedzoneMagic = (char)0x82;
 constexpr int kUsmSharedRedzoneMagic = (char)0x83;
 constexpr int kMemBufferRedzoneMagic = (char)0x84;
+constexpr int kDeviceGlobalRedZoneMagic = (char)0xf9;
 
 constexpr auto kSPIR_AsanShadowMemoryGlobalStart =
     "__AsanShadowMemoryGlobalStart";
@@ -35,6 +36,12 @@ constexpr auto kSPIR_AsanShadowMemoryLocalEnd = "__AsanShadowMemoryLocalEnd";
 constexpr auto kSPIR_DeviceType = "__DeviceType";
 
 constexpr auto kSPIR_DeviceSanitizerReportMem = "__DeviceSanitizerReportMem";
+
+const auto kSPIR_AsanDeviceGlobalNumber = "__AsanDeviceGlobalNumber";
+const auto kSPIR_AsanDeviceGlobalSize = "__AsanDeviceGlobalSize";
+const auto kSPIR_AsanDeviceGlobalSizeWithRedZone =
+    "__AsanDeviceGlobalSizeWithRZ";
+const auto kSPIR_AsanDeviceGlobalAddr = "__AsanDeviceGlobalAddr";
 
 DeviceSanitizerReport SPIR_DeviceSanitizerReportMem;
 
@@ -124,7 +131,7 @@ SanitizerInterceptor::~SanitizerInterceptor() {
 ur_result_t SanitizerInterceptor::allocateMemory(
     ur_context_handle_t Context, ur_device_handle_t Device,
     const ur_usm_desc_t *Properties, ur_usm_pool_handle_t Pool, size_t Size,
-    void **ResultPtr, USMMemoryType Type) {
+    void **ResultPtr, AllocType Type) {
     auto Alignment = Properties->align;
     assert(Alignment == 0 || IsPowerOfTwo(Alignment));
 
@@ -147,13 +154,13 @@ ur_result_t SanitizerInterceptor::allocateMemory(
 
     void *Allocated = nullptr;
 
-    if (Type == USMMemoryType::DEVICE) {
+    if (Type == AllocType::DEVICE_USM) {
         UR_CALL(context.urDdiTable.USM.pfnDeviceAlloc(
             Context, Device, Properties, Pool, NeededSize, &Allocated));
-    } else if (Type == USMMemoryType::HOST) {
+    } else if (Type == AllocType::HOST_USM) {
         UR_CALL(context.urDdiTable.USM.pfnHostAlloc(Context, Properties, Pool,
                                                     NeededSize, &Allocated));
-    } else if (Type == USMMemoryType::SHARE) {
+    } else if (Type == AllocType::SHARED_USM) {
         UR_CALL(context.urDdiTable.USM.pfnSharedAlloc(
             Context, Device, Properties, Pool, NeededSize, &Allocated));
     } else {
@@ -173,31 +180,31 @@ ur_result_t SanitizerInterceptor::allocateMemory(
 
     *ResultPtr = reinterpret_cast<void *>(UserBegin);
 
-    auto AllocInfo = std::make_shared<USMAllocInfo>(
-        USMAllocInfo{AllocBegin, UserBegin, UserEnd, NeededSize, Type});
+    auto AI = std::make_shared<AllocInfo>(
+        AllocInfo{AllocBegin, UserBegin, UserEnd, NeededSize, Type});
 
     // For updating shadow memory
     if (DeviceInfo) { // device/shared USM
         std::scoped_lock<ur_shared_mutex> Guard(DeviceInfo->Mutex);
-        DeviceInfo->AllocInfos.emplace_back(AllocInfo);
+        DeviceInfo->AllocInfos.emplace_back(AI);
     } else { // host USM's AllocInfo needs to insert into all devices
         for (auto &pair : ContextInfo->DeviceMap) {
             auto DeviceInfo = pair.second;
             std::scoped_lock<ur_shared_mutex> Guard(DeviceInfo->Mutex);
-            DeviceInfo->AllocInfos.emplace_back(AllocInfo);
+            DeviceInfo->AllocInfos.emplace_back(AI);
         }
     }
 
     // For memory release
     {
         std::scoped_lock<ur_shared_mutex> Guard(ContextInfo->Mutex);
-        ContextInfo->AllocatedUSMMap[AllocBegin] = std::move(AllocInfo);
+        ContextInfo->AllocatedUSMMap[AllocBegin] = std::move(AI);
     }
 
     context.logger.info(
         "AllocInfos(AllocBegin={},  User={}-{}, NeededSize={}, Type={})",
         (void *)AllocBegin, (void *)UserBegin, (void *)UserEnd, NeededSize,
-        Type);
+        (uint32_t)Type);
 
     return UR_RESULT_SUCCESS;
 }
@@ -477,7 +484,7 @@ ur_result_t SanitizerInterceptor::enqueueMemSetShadow(
 /// ref: https://github.com/google/sanitizers/wiki/AddressSanitizerAlgorithm#mapping
 ur_result_t SanitizerInterceptor::enqueueAllocInfo(
     ur_context_handle_t Context, ur_device_handle_t Device,
-    ur_queue_handle_t Queue, std::shared_ptr<USMAllocInfo> &AllocInfo,
+    ur_queue_handle_t Queue, std::shared_ptr<AllocInfo> &AllocInfo,
     ur_event_handle_t &LastEvent) {
     // Init zero
     UR_CALL(enqueueMemSetShadow(Context, Device, Queue, AllocInfo->AllocBegin,
@@ -498,17 +505,20 @@ ur_result_t SanitizerInterceptor::enqueueAllocInfo(
 
     int ShadowByte;
     switch (AllocInfo->Type) {
-    case USMMemoryType::HOST:
+    case AllocType::HOST_USM:
         ShadowByte = kUsmHostRedzoneMagic;
         break;
-    case USMMemoryType::DEVICE:
+    case AllocType::DEVICE_USM:
         ShadowByte = kUsmDeviceRedzoneMagic;
         break;
-    case USMMemoryType::SHARE:
+    case AllocType::SHARED_USM:
         ShadowByte = kUsmSharedRedzoneMagic;
         break;
-    case USMMemoryType::MEM_BUFFER:
+    case AllocType::MEM_BUFFER:
         ShadowByte = kMemBufferRedzoneMagic;
+        break;
+    case AllocType::DEVICE_GLOBAL:
+        ShadowByte = kDeviceGlobalRedZoneMagic;
         break;
     default:
         ShadowByte = 0xff;
@@ -551,6 +561,101 @@ ur_result_t SanitizerInterceptor::updateShadowMemory(ur_queue_handle_t Queue) {
     DeviceInfo->AllocInfos.clear();
 
     QueueInfo->LastEvent = LastEvent;
+
+    return UR_RESULT_SUCCESS;
+}
+
+ur_result_t
+SanitizerInterceptor::registerDeviceGlobals(ur_context_handle_t Context,
+                                         ur_program_handle_t Program) {
+    std::vector<ur_device_handle_t> Devices;
+    size_t PropSize;
+    ur_result_t Result = context.urDdiTable.Program.pfnGetInfo(
+        Program, UR_PROGRAM_INFO_DEVICES, 0, nullptr, &PropSize);
+    if (Result != UR_RESULT_SUCCESS) {
+        context.logger.error(
+            "Failed to get list of devices associated with program: {}",
+            Result);
+        return Result;
+    }
+
+    Devices.resize(PropSize / sizeof(ur_device_handle_t));
+    Result = context.urDdiTable.Program.pfnGetInfo(
+        Program, UR_PROGRAM_INFO_DEVICES, PropSize, Devices.data(), nullptr);
+    if (Result != UR_RESULT_SUCCESS) {
+        context.logger.error(
+            "Failed to get list of devices associated with program: {}",
+            Result);
+        return Result;
+    }
+
+    for (auto Device : Devices) {
+        ur_queue_handle_t Queue;
+        Result = context.urDdiTable.Queue.pfnCreate(Context, Device, nullptr,
+                                                    &Queue);
+        if (Result != UR_RESULT_SUCCESS) {
+            context.logger.error("Failed to create command queue: {}", Result);
+            return Result;
+        }
+
+        uint64_t NumOfDeviceGlobal;
+        Result = context.urDdiTable.Enqueue.pfnDeviceGlobalVariableRead(
+            Queue, Program, kSPIR_AsanDeviceGlobalNumber, true,
+            sizeof(NumOfDeviceGlobal), 0, &NumOfDeviceGlobal, 0, nullptr,
+            nullptr);
+        if (Result == UR_RESULT_ERROR_INVALID_ARGUMENT) {
+            context.logger.info("No device globals");
+            continue;
+        } else if (Result != UR_RESULT_SUCCESS) {
+            context.logger.error("Device Global[{}] Read Failed: {}",
+                                 kSPIR_AsanDeviceGlobalNumber, Result);
+            return Result;
+        }
+
+        std::vector<uint64_t> Size(NumOfDeviceGlobal);
+        Result = context.urDdiTable.Enqueue.pfnDeviceGlobalVariableRead(
+            Queue, Program, kSPIR_AsanDeviceGlobalSize, true,
+            sizeof(uint64_t) * NumOfDeviceGlobal, 0, &Size[0], 0, nullptr,
+            nullptr);
+        if (Result != UR_RESULT_SUCCESS) {
+            context.logger.error("Device Global[{}] Read Failed: {}",
+                                 kSPIR_AsanDeviceGlobalSize, Result);
+            return Result;
+        }
+
+        std::vector<uint64_t> SizeWithRedZone(NumOfDeviceGlobal);
+        Result = context.urDdiTable.Enqueue.pfnDeviceGlobalVariableRead(
+            Queue, Program, kSPIR_AsanDeviceGlobalSizeWithRedZone, true,
+            sizeof(uint64_t) * NumOfDeviceGlobal, 0, &SizeWithRedZone[0], 0,
+            nullptr, nullptr);
+        if (Result != UR_RESULT_SUCCESS) {
+            context.logger.error("Device Global[{}] Read Failed: {}",
+                                 kSPIR_AsanDeviceGlobalSizeWithRedZone, Result);
+            return Result;
+        }
+
+        std::vector<uint64_t> Addr(NumOfDeviceGlobal);
+        Result = context.urDdiTable.Enqueue.pfnDeviceGlobalVariableRead(
+            Queue, Program, kSPIR_AsanDeviceGlobalAddr, true,
+            sizeof(uint64_t) * NumOfDeviceGlobal, 0, &Addr[0], 0, nullptr,
+            nullptr);
+        if (Result != UR_RESULT_SUCCESS) {
+            context.logger.error("Device Global[{}] Read Failed: {}",
+                                 kSPIR_AsanDeviceGlobalAddr, Result);
+            return Result;
+        }
+
+        auto ContextInfo = getContextInfo(Context);
+        auto DeviceInfo = ContextInfo->getDeviceInfo(Device);
+        for(size_t i = 0; i < NumOfDeviceGlobal; i++) {
+            auto AI = std::make_shared<AllocInfo>(
+                AllocInfo{Addr[i], Addr[i], Addr[i] + Size[i],
+                          SizeWithRedZone[i], AllocType::DEVICE_GLOBAL});
+
+            std::scoped_lock<ur_shared_mutex> Guard(DeviceInfo->Mutex);
+            DeviceInfo->AllocInfos.emplace_back(AI);
+        }
+    }
 
     return UR_RESULT_SUCCESS;
 }
