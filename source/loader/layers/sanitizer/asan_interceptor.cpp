@@ -37,11 +37,11 @@ constexpr auto kSPIR_DeviceType = "__DeviceType";
 
 constexpr auto kSPIR_DeviceSanitizerReportMem = "__DeviceSanitizerReportMem";
 
-const auto kSPIR_AsanDeviceGlobalNumber = "__AsanDeviceGlobalNumber";
-const auto kSPIR_AsanDeviceGlobalSize = "__AsanDeviceGlobalSize";
-const auto kSPIR_AsanDeviceGlobalSizeWithRedZone =
+constexpr auto kSPIR_AsanDeviceGlobalNumber = "__AsanDeviceGlobalNumber";
+constexpr auto kSPIR_AsanDeviceGlobalSize = "__AsanDeviceGlobalSize";
+constexpr auto kSPIR_AsanDeviceGlobalSizeWithRedZone =
     "__AsanDeviceGlobalSizeWithRZ";
-const auto kSPIR_AsanDeviceGlobalAddr = "__AsanDeviceGlobalAddr";
+constexpr auto kSPIR_AsanDeviceGlobalAddr = "__AsanDeviceGlobalAddr";
 
 DeviceSanitizerReport SPIR_DeviceSanitizerReportMem;
 
