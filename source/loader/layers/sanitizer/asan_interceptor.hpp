@@ -101,6 +101,12 @@ struct LaunchInfo {
     ~LaunchInfo();
 };
 
+struct DeviceGlobalInfo {
+    uptr Size;
+    uptr SizeWithRedZone;
+    uptr Addr;
+};
+
 class SanitizerInterceptor {
   public:
     SanitizerInterceptor();

@@ -38,10 +38,7 @@ constexpr auto kSPIR_DeviceType = "__DeviceType";
 constexpr auto kSPIR_DeviceSanitizerReportMem = "__DeviceSanitizerReportMem";
 
 constexpr auto kSPIR_AsanDeviceGlobalNumber = "__AsanDeviceGlobalNumber";
-constexpr auto kSPIR_AsanDeviceGlobalSize = "__AsanDeviceGlobalSize";
-constexpr auto kSPIR_AsanDeviceGlobalSizeWithRedZone =
-    "__AsanDeviceGlobalSizeWithRZ";
-constexpr auto kSPIR_AsanDeviceGlobalAddr = "__AsanDeviceGlobalAddr";
+constexpr auto kSPIR_AsanDeviceGlobalMetadata = "__AsanDeviceGlobalMetadata";
 
 DeviceSanitizerReport SPIR_DeviceSanitizerReportMem;
 
@@ -612,45 +609,24 @@ SanitizerInterceptor::registerDeviceGlobals(ur_context_handle_t Context,
             return Result;
         }
 
-        std::vector<uint64_t> Size(NumOfDeviceGlobal);
+        std::vector<DeviceGlobalInfo> GVInfos(NumOfDeviceGlobal);
         Result = context.urDdiTable.Enqueue.pfnDeviceGlobalVariableRead(
-            Queue, Program, kSPIR_AsanDeviceGlobalSize, true,
-            sizeof(uint64_t) * NumOfDeviceGlobal, 0, &Size[0], 0, nullptr,
-            nullptr);
-        if (Result != UR_RESULT_SUCCESS) {
-            context.logger.error("Device Global[{}] Read Failed: {}",
-                                 kSPIR_AsanDeviceGlobalSize, Result);
-            return Result;
-        }
-
-        std::vector<uint64_t> SizeWithRedZone(NumOfDeviceGlobal);
-        Result = context.urDdiTable.Enqueue.pfnDeviceGlobalVariableRead(
-            Queue, Program, kSPIR_AsanDeviceGlobalSizeWithRedZone, true,
-            sizeof(uint64_t) * NumOfDeviceGlobal, 0, &SizeWithRedZone[0], 0,
+            Queue, Program, kSPIR_AsanDeviceGlobalMetadata, true,
+            sizeof(DeviceGlobalInfo) * NumOfDeviceGlobal, 0, &GVInfos[0], 0,
             nullptr, nullptr);
         if (Result != UR_RESULT_SUCCESS) {
             context.logger.error("Device Global[{}] Read Failed: {}",
-                                 kSPIR_AsanDeviceGlobalSizeWithRedZone, Result);
-            return Result;
-        }
-
-        std::vector<uint64_t> Addr(NumOfDeviceGlobal);
-        Result = context.urDdiTable.Enqueue.pfnDeviceGlobalVariableRead(
-            Queue, Program, kSPIR_AsanDeviceGlobalAddr, true,
-            sizeof(uint64_t) * NumOfDeviceGlobal, 0, &Addr[0], 0, nullptr,
-            nullptr);
-        if (Result != UR_RESULT_SUCCESS) {
-            context.logger.error("Device Global[{}] Read Failed: {}",
-                                 kSPIR_AsanDeviceGlobalAddr, Result);
+                                 kSPIR_AsanDeviceGlobalMetadata, Result);
             return Result;
         }
 
         auto ContextInfo = getContextInfo(Context);
         auto DeviceInfo = ContextInfo->getDeviceInfo(Device);
-        for(size_t i = 0; i < NumOfDeviceGlobal; i++) {
-            auto AI = std::make_shared<AllocInfo>(
-                AllocInfo{Addr[i], Addr[i], Addr[i] + Size[i],
-                          SizeWithRedZone[i], AllocType::DEVICE_GLOBAL});
+        for (size_t i = 0; i < NumOfDeviceGlobal; i++) {
+            auto AI = std::make_shared<AllocInfo>(AllocInfo{
+                GVInfos[i].Addr, GVInfos[i].Addr,
+                GVInfos[i].Addr + GVInfos[i].Size, GVInfos[i].SizeWithRedZone,
+                AllocType::DEVICE_GLOBAL});
 
             std::scoped_lock<ur_shared_mutex> Guard(DeviceInfo->Mutex);
             DeviceInfo->AllocInfos.emplace_back(AI);
