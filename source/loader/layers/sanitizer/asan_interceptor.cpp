@@ -37,7 +37,7 @@ constexpr auto kSPIR_DeviceType = "__DeviceType";
 
 constexpr auto kSPIR_DeviceSanitizerReportMem = "__DeviceSanitizerReportMem";
 
-constexpr auto kSPIR_AsanDeviceGlobalNumber = "__AsanDeviceGlobalNumber";
+constexpr auto kSPIR_AsanDeviceGlobalCount = "__AsanDeviceGlobalCount";
 constexpr auto kSPIR_AsanDeviceGlobalMetadata = "__AsanDeviceGlobalMetadata";
 
 DeviceSanitizerReport SPIR_DeviceSanitizerReportMem;
@@ -214,7 +214,7 @@ ur_result_t SanitizerInterceptor::allocateMemory(
     context.logger.info(
         "AllocInfos(AllocBegin={},  User={}-{}, NeededSize={}, Type={})",
         (void *)AllocBegin, (void *)UserBegin, (void *)UserEnd, NeededSize,
-        (uint32_t)Type);
+        ToString(Type));
 
     return UR_RESULT_SUCCESS;
 }
@@ -299,8 +299,8 @@ void SanitizerInterceptor::postLaunchKernel(ur_kernel_handle_t Kernel,
         auto KernelName = getKernelName(Kernel);
 
         context.logger.always("\n====ERROR: DeviceSanitizer: {} on {}",
-                              DeviceSanitizerFormat(AH->ErrorType),
-                              DeviceSanitizerFormat(AH->MemoryType));
+                              ToString(AH->ErrorType),
+                              ToString(AH->MemoryType));
         context.logger.always(
             "{} of size {} at kernel <{}> LID({}, {}, {}) GID({}, "
             "{}, {})",
@@ -592,7 +592,7 @@ SanitizerInterceptor::registerDeviceGlobals(ur_context_handle_t Context,
 
         uint64_t NumOfDeviceGlobal;
         Result = context.urDdiTable.Enqueue.pfnDeviceGlobalVariableRead(
-            Queue, Program, kSPIR_AsanDeviceGlobalNumber, true,
+            Queue, Program, kSPIR_AsanDeviceGlobalCount, true,
             sizeof(NumOfDeviceGlobal), 0, &NumOfDeviceGlobal, 0, nullptr,
             nullptr);
         if (Result == UR_RESULT_ERROR_INVALID_ARGUMENT) {
@@ -600,7 +600,7 @@ SanitizerInterceptor::registerDeviceGlobals(ur_context_handle_t Context,
             continue;
         } else if (Result != UR_RESULT_SUCCESS) {
             context.logger.error("Device Global[{}] Read Failed: {}",
-                                 kSPIR_AsanDeviceGlobalNumber, Result);
+                                 kSPIR_AsanDeviceGlobalCount, Result);
             return Result;
         }
 

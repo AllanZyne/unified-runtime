@@ -178,4 +178,21 @@ class SanitizerInterceptor {
     bool m_ShadowMemInited;
 };
 
+inline const char *ToString(AllocType Type) {
+    switch (Type) {
+    case AllocType::DEVICE_USM:
+        return "Device USM";
+    case AllocType::HOST_USM:
+        return "Host USM";
+    case AllocType::SHARED_USM:
+        return "Shared USM";
+    case AllocType::MEM_BUFFER:
+        return "Memory Buffer";
+    case AllocType::DEVICE_GLOBAL:
+        return "Device Global";
+    default:
+        return "Unknown Type";
+    }
+}
+
 } // namespace ur_sanitizer_layer
