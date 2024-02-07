@@ -82,6 +82,19 @@ ur_program_handle_t getProgram(ur_kernel_handle_t Kernel) {
     return Program;
 }
 
+void getProgramDevices(ur_program_handle_t Program,
+                       std::vector<ur_device_handle_t> &Devices) {
+    size_t PropSize;
+    [[maybe_unused]] ur_result_t Result = context.urDdiTable.Program.pfnGetInfo(
+        Program, UR_PROGRAM_INFO_DEVICES, 0, nullptr, &PropSize);
+    assert(Result == UR_RESULT_SUCCESS);
+
+    Devices.resize(PropSize / sizeof(ur_device_handle_t));
+    Result = context.urDdiTable.Program.pfnGetInfo(
+        Program, UR_PROGRAM_INFO_DEVICES, PropSize, Devices.data(), nullptr);
+    assert(Result == UR_RESULT_SUCCESS);
+}
+
 size_t getLocalMemorySize(ur_device_handle_t Device) {
     size_t LocalMemorySize;
     [[maybe_unused]] auto Result = context.urDdiTable.Device.pfnGetInfo(
@@ -566,30 +579,12 @@ ur_result_t
 SanitizerInterceptor::registerDeviceGlobals(ur_context_handle_t Context,
                                          ur_program_handle_t Program) {
     std::vector<ur_device_handle_t> Devices;
-    size_t PropSize;
-    ur_result_t Result = context.urDdiTable.Program.pfnGetInfo(
-        Program, UR_PROGRAM_INFO_DEVICES, 0, nullptr, &PropSize);
-    if (Result != UR_RESULT_SUCCESS) {
-        context.logger.error(
-            "Failed to get list of devices associated with program: {}",
-            Result);
-        return Result;
-    }
-
-    Devices.resize(PropSize / sizeof(ur_device_handle_t));
-    Result = context.urDdiTable.Program.pfnGetInfo(
-        Program, UR_PROGRAM_INFO_DEVICES, PropSize, Devices.data(), nullptr);
-    if (Result != UR_RESULT_SUCCESS) {
-        context.logger.error(
-            "Failed to get list of devices associated with program: {}",
-            Result);
-        return Result;
-    }
+    getProgramDevices(Program, Devices);
 
     for (auto Device : Devices) {
         ur_queue_handle_t Queue;
-        Result = context.urDdiTable.Queue.pfnCreate(Context, Device, nullptr,
-                                                    &Queue);
+        ur_result_t Result = context.urDdiTable.Queue.pfnCreate(
+            Context, Device, nullptr, &Queue);
         if (Result != UR_RESULT_SUCCESS) {
             context.logger.error("Failed to create command queue: {}", Result);
             return Result;
