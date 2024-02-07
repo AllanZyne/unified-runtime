@@ -74,7 +74,7 @@ inline const char *DeviceSanitizerFormat(DeviceSanitizerMemoryType MemoryType) {
     case DeviceSanitizerMemoryType::MEM_BUFFER:
         return "Memory Buffer";
     case DeviceSanitizerMemoryType::DEVICE_GLOBAL:
-        return "Deivce Global";
+        return "Device Global";
     default:
         return "Unknown Memory";
     }
