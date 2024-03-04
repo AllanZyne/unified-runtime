@@ -21,7 +21,7 @@
 
 namespace ur_sanitizer_layer {
 
-enum class AllocType {
+enum class AllocType : uint32_t {
     DEVICE_USM,
     SHARED_USM,
     HOST_USM,
@@ -131,9 +131,17 @@ struct LaunchInfo : LaunchInfoBase {
     ~LaunchInfo();
 };
 
+struct DeviceGlobalInfo {
+    uptr Size;
+    uptr SizeWithRedZone;
+    uptr Addr;
+};
+
 class SanitizerInterceptor {
   public:
     SanitizerInterceptor();
+
+    ~SanitizerInterceptor();
 
     ur_result_t allocateMemory(ur_context_handle_t Context,
                                ur_device_handle_t Device,
@@ -141,6 +149,9 @@ class SanitizerInterceptor {
                                ur_usm_pool_handle_t Pool, size_t Size,
                                void **ResultPtr, AllocType Type);
     ur_result_t releaseMemory(ur_context_handle_t Context, void *Ptr);
+
+    ur_result_t registerDeviceGlobals(ur_context_handle_t Context,
+                                      ur_program_handle_t Program);
 
     ur_result_t
     preLaunchKernel(ur_kernel_handle_t Kernel, ur_queue_handle_t Queue,
@@ -168,6 +179,14 @@ class SanitizerInterceptor {
         m_MemBufferMap.emplace(
             reinterpret_cast<ur_mem_handle_t>(MemBuffer.get()), MemBuffer);
     }
+
+  private:
+    ur_result_t updateShadowMemory(ur_queue_handle_t Queue);
+    ur_result_t enqueueAllocInfo(ur_context_handle_t Context,
+                                 ur_device_handle_t Device,
+                                 ur_queue_handle_t Queue,
+                                 std::shared_ptr<AllocInfo> &AI,
+                                 ur_event_handle_t &LastEvent);
 
     void eraseMemBuffer(ur_mem_handle_t MemHandle) {
         std::scoped_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
@@ -220,6 +239,24 @@ class SanitizerInterceptor {
     ur_shared_mutex m_MemBufferMapMutex;
 
     bool m_IsInASanContext;
+    bool m_ShadowMemInited;
 };
+
+inline const char *ToString(AllocType Type) {
+    switch (Type) {
+    case AllocType::DEVICE_USM:
+        return "Device USM";
+    case AllocType::HOST_USM:
+        return "Host USM";
+    case AllocType::SHARED_USM:
+        return "Shared USM";
+    case AllocType::MEM_BUFFER:
+        return "Memory Buffer";
+    case AllocType::DEVICE_GLOBAL:
+        return "Device Global";
+    default:
+        return "Unknown Type";
+    }
+}
 
 } // namespace ur_sanitizer_layer

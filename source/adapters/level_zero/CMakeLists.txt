@@ -34,7 +34,7 @@ if (NOT DEFINED LEVEL_ZERO_LIBRARY OR NOT DEFINED LEVEL_ZERO_INCLUDE_DIR)
     endif()
 
     set(LEVEL_ZERO_LOADER_REPO "https://github.com/oneapi-src/level-zero.git")
-    set(LEVEL_ZERO_LOADER_TAG v1.15.1)
+    set(LEVEL_ZERO_LOADER_TAG v1.16.1)
 
     # Disable due to a bug https://github.com/oneapi-src/level-zero/issues/104
     set(CMAKE_INCLUDE_CURRENT_DIR OFF)
@@ -124,7 +124,7 @@ add_ur_adapter(${TARGET_NAME}
 
 # TODO: fix level_zero adapter conversion warnings
 target_compile_options(${TARGET_NAME} PRIVATE
-    $<$<CXX_COMPILER_ID:MSVC>:/wd4267 /wd4805 /wd4244 /D_CRT_SECURE_NO_WARNINGS>
+    $<$<CXX_COMPILER_ID:MSVC>:/wd4805 /wd4244>
 )
 
 set_target_properties(${TARGET_NAME} PROPERTIES
@@ -132,10 +132,14 @@ set_target_properties(${TARGET_NAME} PROPERTIES
     SOVERSION "${PROJECT_VERSION_MAJOR}"
 )
 
+if (WIN32)
+ # 0x800: Search for the DLL only in the System32 folder
+ target_link_options(ur_adapter_level_zero PUBLIC /DEPENDENTLOADFLAG:0x800)
+endif()
+
 target_link_libraries(${TARGET_NAME} PRIVATE
     ${PROJECT_NAME}::headers
     ${PROJECT_NAME}::common
-    ${PROJECT_NAME}::unified_malloc_framework
     LevelZeroLoader
     LevelZeroLoader-Headers
 )

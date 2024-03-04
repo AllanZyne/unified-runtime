@@ -778,6 +778,52 @@ ur_result_t UR_APICALL urDeviceGet(
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+/// @brief Retrieves devices within a platform selected by ONEAPI_DEVICE_SELECTOR
+///
+/// @details
+///     - Multiple calls to this function will return identical device handles,
+///       in the same order.
+///     - The number and order of handles returned from this function will be
+///       affected by environment variables that filter or select which devices
+///       are exposed through this API.
+///     - A reference is taken for each returned device and must be released
+///       with a subsequent call to ::urDeviceRelease.
+///     - The application may call this function from simultaneous threads, the
+///       implementation must be thread-safe.
+///
+/// @returns
+///     - ::UR_RESULT_SUCCESS
+///     - ::UR_RESULT_ERROR_UNINITIALIZED
+///     - ::UR_RESULT_ERROR_DEVICE_LOST
+///     - ::UR_RESULT_ERROR_ADAPTER_SPECIFIC
+///     - ::UR_RESULT_ERROR_INVALID_NULL_HANDLE
+///         + `NULL == hPlatform`
+///     - ::UR_RESULT_ERROR_INVALID_ENUMERATION
+///         + `::UR_DEVICE_TYPE_VPU < DeviceType`
+///     - ::UR_RESULT_ERROR_INVALID_VALUE
+ur_result_t UR_APICALL urDeviceGetSelected(
+    ur_platform_handle_t hPlatform, ///< [in] handle of the platform instance
+    ur_device_type_t DeviceType,    ///< [in] the type of the devices.
+    uint32_t
+        NumEntries, ///< [in] the number of devices to be added to phDevices.
+    ///< If phDevices in not NULL then NumEntries should be greater than zero,
+    ///< otherwise ::UR_RESULT_ERROR_INVALID_VALUE,
+    ///< will be returned.
+    ur_device_handle_t *
+        phDevices, ///< [out][optional][range(0, NumEntries)] array of handle of devices.
+    ///< If NumEntries is less than the number of devices available, then only
+    ///< that number of devices will be retrieved.
+    uint32_t *pNumDevices ///< [out][optional] pointer to the number of devices.
+    ///< pNumDevices will be updated with the total number of selected devices
+    ///< available for the given platform.
+    ) try {
+    return ur_lib::urDeviceGetSelected(hPlatform, DeviceType, NumEntries,
+                                       phDevices, pNumDevices);
+} catch (...) {
+    return exceptionToResult(std::current_exception());
+}
+
+///////////////////////////////////////////////////////////////////////////////
 /// @brief Retrieves various information about device
 ///
 /// @details
@@ -1654,12 +1700,15 @@ ur_result_t UR_APICALL urMemBufferPartition(
 ///     - ::UR_RESULT_ERROR_ADAPTER_SPECIFIC
 ///     - ::UR_RESULT_ERROR_INVALID_NULL_HANDLE
 ///         + `NULL == hMem`
+///         + `NULL == hDevice`
 ///     - ::UR_RESULT_ERROR_INVALID_NULL_POINTER
 ///         + `NULL == phNativeMem`
 ///     - ::UR_RESULT_ERROR_UNSUPPORTED_FEATURE
 ///         + If the adapter has no underlying equivalent handle.
 ur_result_t UR_APICALL urMemGetNativeHandle(
     ur_mem_handle_t hMem, ///< [in] handle of the mem.
+    ur_device_handle_t
+        hDevice, ///< [in] handle of the device that the native handle will be resident on.
     ur_native_handle_t
         *phNativeMem ///< [out] a pointer to the native handle of the mem.
     ) try {
@@ -1669,7 +1718,7 @@ ur_result_t UR_APICALL urMemGetNativeHandle(
         return UR_RESULT_ERROR_UNINITIALIZED;
     }
 
-    return pfnGetNativeHandle(hMem, phNativeMem);
+    return pfnGetNativeHandle(hMem, hDevice, phNativeMem);
 } catch (...) {
     return exceptionToResult(std::current_exception());
 }
@@ -7013,7 +7062,7 @@ ur_result_t UR_APICALL urBindlessImagesSignalExternalSemaphoreExp(
 /// @brief Create a Command-Buffer object
 ///
 /// @details
-///     - Create a command-buffer object
+///     - Create a command-buffer object.
 ///
 /// @returns
 ///     - ::UR_RESULT_SUCCESS
@@ -7030,12 +7079,12 @@ ur_result_t UR_APICALL urBindlessImagesSignalExternalSemaphoreExp(
 ///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
 ur_result_t UR_APICALL urCommandBufferCreateExp(
-    ur_context_handle_t hContext, ///< [in] handle of the context object
-    ur_device_handle_t hDevice,   ///< [in] handle of the device object
+    ur_context_handle_t hContext, ///< [in] Handle of the context object.
+    ur_device_handle_t hDevice,   ///< [in] Handle of the device object.
     const ur_exp_command_buffer_desc_t
-        *pCommandBufferDesc, ///< [in][optional] CommandBuffer descriptor
+        *pCommandBufferDesc, ///< [in][optional] command-buffer descriptor.
     ur_exp_command_buffer_handle_t
-        *phCommandBuffer ///< [out] pointer to Command-Buffer handle
+        *phCommandBuffer ///< [out] Pointer to command-Buffer handle.
     ) try {
     auto pfnCreateExp =
         ur_lib::context->urDdiTable.CommandBufferExp.pfnCreateExp;
@@ -7063,7 +7112,7 @@ ur_result_t UR_APICALL urCommandBufferCreateExp(
 ///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
 ur_result_t UR_APICALL urCommandBufferRetainExp(
     ur_exp_command_buffer_handle_t
-        hCommandBuffer ///< [in] handle of the command-buffer object
+        hCommandBuffer ///< [in] Handle of the command-buffer object.
     ) try {
     auto pfnRetainExp =
         ur_lib::context->urDdiTable.CommandBufferExp.pfnRetainExp;
@@ -7092,7 +7141,7 @@ ur_result_t UR_APICALL urCommandBufferRetainExp(
 ///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
 ur_result_t UR_APICALL urCommandBufferReleaseExp(
     ur_exp_command_buffer_handle_t
-        hCommandBuffer ///< [in] handle of the command-buffer object
+        hCommandBuffer ///< [in] Handle of the command-buffer object.
     ) try {
     auto pfnReleaseExp =
         ur_lib::context->urDdiTable.CommandBufferExp.pfnReleaseExp;
@@ -7121,7 +7170,7 @@ ur_result_t UR_APICALL urCommandBufferReleaseExp(
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
 ur_result_t UR_APICALL urCommandBufferFinalizeExp(
     ur_exp_command_buffer_handle_t
-        hCommandBuffer ///< [in] handle of the command-buffer object
+        hCommandBuffer ///< [in] Handle of the command-buffer object.
     ) try {
     auto pfnFinalizeExp =
         ur_lib::context->urDdiTable.CommandBufferExp.pfnFinalizeExp;
@@ -7135,7 +7184,7 @@ ur_result_t UR_APICALL urCommandBufferFinalizeExp(
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-/// @brief Append a kernel execution command to a command-buffer object
+/// @brief Append a kernel execution command to a command-buffer object.
 ///
 /// @returns
 ///     - ::UR_RESULT_SUCCESS
@@ -7162,9 +7211,9 @@ ur_result_t UR_APICALL urCommandBufferFinalizeExp(
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
 ur_result_t UR_APICALL urCommandBufferAppendKernelLaunchExp(
     ur_exp_command_buffer_handle_t
-        hCommandBuffer,         ///< [in] handle of the command-buffer object
-    ur_kernel_handle_t hKernel, ///< [in] kernel to append
-    uint32_t workDim,           ///< [in] dimension of the kernel execution
+        hCommandBuffer,         ///< [in] Handle of the command-buffer object.
+    ur_kernel_handle_t hKernel, ///< [in] Kernel to append.
+    uint32_t workDim,           ///< [in] Dimension of the kernel execution.
     const size_t
         *pGlobalWorkOffset, ///< [in] Offset to use when executing kernel.
     const size_t *
@@ -7175,8 +7224,10 @@ ur_result_t UR_APICALL urCommandBufferAppendKernelLaunchExp(
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
         pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
-    ur_exp_command_buffer_sync_point_t
-        *pSyncPoint ///< [out][optional] sync point associated with this command
+    ur_exp_command_buffer_sync_point_t *
+        pSyncPoint, ///< [out][optional] Sync point associated with this command.
+    ur_exp_command_buffer_command_handle_t
+        *phCommand ///< [out][optional] Handle to this command.
     ) try {
     auto pfnAppendKernelLaunchExp =
         ur_lib::context->urDdiTable.CommandBufferExp.pfnAppendKernelLaunchExp;
@@ -7187,13 +7238,13 @@ ur_result_t UR_APICALL urCommandBufferAppendKernelLaunchExp(
     return pfnAppendKernelLaunchExp(hCommandBuffer, hKernel, workDim,
                                     pGlobalWorkOffset, pGlobalWorkSize,
                                     pLocalWorkSize, numSyncPointsInWaitList,
-                                    pSyncPointWaitList, pSyncPoint);
+                                    pSyncPointWaitList, pSyncPoint, phCommand);
 } catch (...) {
     return exceptionToResult(std::current_exception());
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-/// @brief Append a USM memcpy command to a command-buffer object
+/// @brief Append a USM memcpy command to a command-buffer object.
 ///
 /// @returns
 ///     - ::UR_RESULT_SUCCESS
@@ -7218,16 +7269,16 @@ ur_result_t UR_APICALL urCommandBufferAppendKernelLaunchExp(
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
 ur_result_t UR_APICALL urCommandBufferAppendUSMMemcpyExp(
     ur_exp_command_buffer_handle_t
-        hCommandBuffer, ///< [in] handle of the command-buffer object.
+        hCommandBuffer, ///< [in] Handle of the command-buffer object.
     void *pDst,         ///< [in] Location the data will be copied to.
     const void *pSrc,   ///< [in] The data to be copied.
-    size_t size,        ///< [in] The number of bytes to copy
+    size_t size,        ///< [in] The number of bytes to copy.
     uint32_t
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
         pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
-    ur_exp_command_buffer_sync_point_t
-        *pSyncPoint ///< [out][optional] sync point associated with this command
+    ur_exp_command_buffer_sync_point_t *
+        pSyncPoint ///< [out][optional] Sync point associated with this command.
     ) try {
     auto pfnAppendUSMMemcpyExp =
         ur_lib::context->urDdiTable.CommandBufferExp.pfnAppendUSMMemcpyExp;
@@ -7243,7 +7294,7 @@ ur_result_t UR_APICALL urCommandBufferAppendUSMMemcpyExp(
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-/// @brief Append a USM fill command to a command-buffer object
+/// @brief Append a USM fill command to a command-buffer object.
 ///
 /// @returns
 ///     - ::UR_RESULT_SUCCESS
@@ -7298,7 +7349,7 @@ ur_result_t UR_APICALL urCommandBufferAppendUSMFillExp(
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-/// @brief Append a memory copy command to a command-buffer object
+/// @brief Append a memory copy command to a command-buffer object.
 ///
 /// @returns
 ///     - ::UR_RESULT_SUCCESS
@@ -7319,7 +7370,7 @@ ur_result_t UR_APICALL urCommandBufferAppendUSMFillExp(
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
 ur_result_t UR_APICALL urCommandBufferAppendMemBufferCopyExp(
     ur_exp_command_buffer_handle_t
-        hCommandBuffer,      ///< [in] handle of the command-buffer object.
+        hCommandBuffer,      ///< [in] Handle of the command-buffer object.
     ur_mem_handle_t hSrcMem, ///< [in] The data to be copied.
     ur_mem_handle_t hDstMem, ///< [in] The location the data will be copied to.
     size_t srcOffset,        ///< [in] Offset into the source memory.
@@ -7329,8 +7380,8 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferCopyExp(
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
         pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
-    ur_exp_command_buffer_sync_point_t
-        *pSyncPoint ///< [out][optional] sync point associated with this command
+    ur_exp_command_buffer_sync_point_t *
+        pSyncPoint ///< [out][optional] Sync point associated with this command.
     ) try {
     auto pfnAppendMemBufferCopyExp =
         ur_lib::context->urDdiTable.CommandBufferExp.pfnAppendMemBufferCopyExp;
@@ -7346,7 +7397,7 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferCopyExp(
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-/// @brief Append a memory write command to a command-buffer object
+/// @brief Append a memory write command to a command-buffer object.
 ///
 /// @returns
 ///     - ::UR_RESULT_SUCCESS
@@ -7368,18 +7419,18 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferCopyExp(
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
 ur_result_t UR_APICALL urCommandBufferAppendMemBufferWriteExp(
     ur_exp_command_buffer_handle_t
-        hCommandBuffer,      ///< [in] handle of the command-buffer object.
-    ur_mem_handle_t hBuffer, ///< [in] handle of the buffer object.
-    size_t offset,           ///< [in] offset in bytes in the buffer object.
-    size_t size,             ///< [in] size in bytes of data being written.
+        hCommandBuffer,      ///< [in] Handle of the command-buffer object.
+    ur_mem_handle_t hBuffer, ///< [in] Handle of the buffer object.
+    size_t offset,           ///< [in] Offset in bytes in the buffer object.
+    size_t size,             ///< [in] Size in bytes of data being written.
     const void *
-        pSrc, ///< [in] pointer to host memory where data is to be written from.
+        pSrc, ///< [in] Pointer to host memory where data is to be written from.
     uint32_t
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
         pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
-    ur_exp_command_buffer_sync_point_t
-        *pSyncPoint ///< [out][optional] sync point associated with this command
+    ur_exp_command_buffer_sync_point_t *
+        pSyncPoint ///< [out][optional] Sync point associated with this command.
     ) try {
     auto pfnAppendMemBufferWriteExp =
         ur_lib::context->urDdiTable.CommandBufferExp.pfnAppendMemBufferWriteExp;
@@ -7395,7 +7446,7 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferWriteExp(
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-/// @brief Append a memory read command to a command-buffer object
+/// @brief Append a memory read command to a command-buffer object.
 ///
 /// @returns
 ///     - ::UR_RESULT_SUCCESS
@@ -7417,17 +7468,17 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferWriteExp(
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
 ur_result_t UR_APICALL urCommandBufferAppendMemBufferReadExp(
     ur_exp_command_buffer_handle_t
-        hCommandBuffer,      ///< [in] handle of the command-buffer object.
-    ur_mem_handle_t hBuffer, ///< [in] handle of the buffer object.
-    size_t offset,           ///< [in] offset in bytes in the buffer object.
-    size_t size,             ///< [in] size in bytes of data being written.
-    void *pDst, ///< [in] pointer to host memory where data is to be written to.
+        hCommandBuffer,      ///< [in] Handle of the command-buffer object.
+    ur_mem_handle_t hBuffer, ///< [in] Handle of the buffer object.
+    size_t offset,           ///< [in] Offset in bytes in the buffer object.
+    size_t size,             ///< [in] Size in bytes of data being written.
+    void *pDst, ///< [in] Pointer to host memory where data is to be written to.
     uint32_t
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
         pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
-    ur_exp_command_buffer_sync_point_t
-        *pSyncPoint ///< [out][optional] sync point associated with this command
+    ur_exp_command_buffer_sync_point_t *
+        pSyncPoint ///< [out][optional] Sync point associated with this command.
     ) try {
     auto pfnAppendMemBufferReadExp =
         ur_lib::context->urDdiTable.CommandBufferExp.pfnAppendMemBufferReadExp;
@@ -7443,7 +7494,7 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferReadExp(
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-/// @brief Append a rectangular memory copy command to a command-buffer object
+/// @brief Append a rectangular memory copy command to a command-buffer object.
 ///
 /// @returns
 ///     - ::UR_RESULT_SUCCESS
@@ -7464,7 +7515,7 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferReadExp(
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
 ur_result_t UR_APICALL urCommandBufferAppendMemBufferCopyRectExp(
     ur_exp_command_buffer_handle_t
-        hCommandBuffer,      ///< [in] handle of the command-buffer object.
+        hCommandBuffer,      ///< [in] Handle of the command-buffer object.
     ur_mem_handle_t hSrcMem, ///< [in] The data to be copied.
     ur_mem_handle_t hDstMem, ///< [in] The location the data will be copied to.
     ur_rect_offset_t
@@ -7481,8 +7532,8 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferCopyRectExp(
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
         pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
-    ur_exp_command_buffer_sync_point_t
-        *pSyncPoint ///< [out][optional] sync point associated with this command
+    ur_exp_command_buffer_sync_point_t *
+        pSyncPoint ///< [out][optional] Sync point associated with this command.
     ) try {
     auto pfnAppendMemBufferCopyRectExp =
         ur_lib::context->urDdiTable.CommandBufferExp
@@ -7500,7 +7551,7 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferCopyRectExp(
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-/// @brief Append a rectangular memory write command to a command-buffer object
+/// @brief Append a rectangular memory write command to a command-buffer object.
 ///
 /// @returns
 ///     - ::UR_RESULT_SUCCESS
@@ -7522,31 +7573,31 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferCopyRectExp(
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
 ur_result_t UR_APICALL urCommandBufferAppendMemBufferWriteRectExp(
     ur_exp_command_buffer_handle_t
-        hCommandBuffer,      ///< [in] handle of the command-buffer object.
-    ur_mem_handle_t hBuffer, ///< [in] handle of the buffer object.
+        hCommandBuffer,      ///< [in] Handle of the command-buffer object.
+    ur_mem_handle_t hBuffer, ///< [in] Handle of the buffer object.
     ur_rect_offset_t bufferOffset, ///< [in] 3D offset in the buffer.
     ur_rect_offset_t hostOffset,   ///< [in] 3D offset in the host region.
     ur_rect_region_t
         region, ///< [in] 3D rectangular region descriptor: width, height, depth.
     size_t
-        bufferRowPitch, ///< [in] length of each row in bytes in the buffer object.
+        bufferRowPitch, ///< [in] Length of each row in bytes in the buffer object.
     size_t
-        bufferSlicePitch, ///< [in] length of each 2D slice in bytes in the buffer object being
+        bufferSlicePitch, ///< [in] Length of each 2D slice in bytes in the buffer object being
                           ///< written.
     size_t
-        hostRowPitch, ///< [in] length of each row in bytes in the host memory region pointed to
+        hostRowPitch, ///< [in] Length of each row in bytes in the host memory region pointed to
                       ///< by pSrc.
     size_t
-        hostSlicePitch, ///< [in] length of each 2D slice in bytes in the host memory region
+        hostSlicePitch, ///< [in] Length of each 2D slice in bytes in the host memory region
                         ///< pointed to by pSrc.
     void *
-        pSrc, ///< [in] pointer to host memory where data is to be written from.
+        pSrc, ///< [in] Pointer to host memory where data is to be written from.
     uint32_t
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
         pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
-    ur_exp_command_buffer_sync_point_t
-        *pSyncPoint ///< [out][optional] sync point associated with this command
+    ur_exp_command_buffer_sync_point_t *
+        pSyncPoint ///< [out][optional] Sync point associated with this command.
     ) try {
     auto pfnAppendMemBufferWriteRectExp =
         ur_lib::context->urDdiTable.CommandBufferExp
@@ -7564,7 +7615,7 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferWriteRectExp(
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-/// @brief Append a rectangular memory read command to a command-buffer object
+/// @brief Append a rectangular memory read command to a command-buffer object.
 ///
 /// @returns
 ///     - ::UR_RESULT_SUCCESS
@@ -7586,29 +7637,29 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferWriteRectExp(
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
 ur_result_t UR_APICALL urCommandBufferAppendMemBufferReadRectExp(
     ur_exp_command_buffer_handle_t
-        hCommandBuffer,      ///< [in] handle of the command-buffer object.
-    ur_mem_handle_t hBuffer, ///< [in] handle of the buffer object.
+        hCommandBuffer,      ///< [in] Handle of the command-buffer object.
+    ur_mem_handle_t hBuffer, ///< [in] Handle of the buffer object.
     ur_rect_offset_t bufferOffset, ///< [in] 3D offset in the buffer.
     ur_rect_offset_t hostOffset,   ///< [in] 3D offset in the host region.
     ur_rect_region_t
         region, ///< [in] 3D rectangular region descriptor: width, height, depth.
     size_t
-        bufferRowPitch, ///< [in] length of each row in bytes in the buffer object.
+        bufferRowPitch, ///< [in] Length of each row in bytes in the buffer object.
     size_t
-        bufferSlicePitch, ///< [in] length of each 2D slice in bytes in the buffer object being read.
+        bufferSlicePitch, ///< [in] Length of each 2D slice in bytes in the buffer object being read.
     size_t
-        hostRowPitch, ///< [in] length of each row in bytes in the host memory region pointed to
+        hostRowPitch, ///< [in] Length of each row in bytes in the host memory region pointed to
                       ///< by pDst.
     size_t
-        hostSlicePitch, ///< [in] length of each 2D slice in bytes in the host memory region
+        hostSlicePitch, ///< [in] Length of each 2D slice in bytes in the host memory region
                         ///< pointed to by pDst.
-    void *pDst, ///< [in] pointer to host memory where data is to be read into.
+    void *pDst, ///< [in] Pointer to host memory where data is to be read into.
     uint32_t
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
         pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
-    ur_exp_command_buffer_sync_point_t
-        *pSyncPoint ///< [out][optional] sync point associated with this command
+    ur_exp_command_buffer_sync_point_t *
+        pSyncPoint ///< [out][optional] Sync point associated with this command.
     ) try {
     auto pfnAppendMemBufferReadRectExp =
         ur_lib::context->urDdiTable.CommandBufferExp
@@ -7626,7 +7677,7 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferReadRectExp(
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-/// @brief Append a memory fill command to a command-buffer object
+/// @brief Append a memory fill command to a command-buffer object.
 ///
 /// @returns
 ///     - ::UR_RESULT_SUCCESS
@@ -7678,7 +7729,7 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferFillExp(
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-/// @brief Append a USM Prefetch command to a command-buffer object
+/// @brief Append a USM Prefetch command to a command-buffer object.
 ///
 /// @details
 ///     - Prefetching may not be supported for all devices or allocation types.
@@ -7734,7 +7785,7 @@ ur_result_t UR_APICALL urCommandBufferAppendUSMPrefetchExp(
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-/// @brief Append a USM Advise command to a command-buffer object
+/// @brief Append a USM Advise command to a command-buffer object.
 ///
 /// @details
 ///     - Not all memory advice hints may be supported for all devices or
@@ -7811,15 +7862,14 @@ ur_result_t UR_APICALL urCommandBufferAppendUSMAdviseExp(
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
 ur_result_t UR_APICALL urCommandBufferEnqueueExp(
     ur_exp_command_buffer_handle_t
-        hCommandBuffer, ///< [in] handle of the command-buffer object.
+        hCommandBuffer, ///< [in] Handle of the command-buffer object.
     ur_queue_handle_t
-        hQueue, ///< [in] the queue to submit this command-buffer for execution.
-    uint32_t numEventsInWaitList, ///< [in] size of the event wait list
+        hQueue, ///< [in] The queue to submit this command-buffer for execution.
+    uint32_t numEventsInWaitList, ///< [in] Size of the event wait list.
     const ur_event_handle_t *
         phEventWaitList, ///< [in][optional][range(0, numEventsInWaitList)] pointer to a list of
     ///< events that must be complete before the command-buffer execution.
-    ///< If nullptr, the numEventsInWaitList must be 0, indicating no wait
-    ///< events.
+    ///< If nullptr, the numEventsInWaitList must be 0, indicating no wait events.
     ur_event_handle_t *
         phEvent ///< [out][optional] return an event object that identifies this particular
                 ///< command-buffer execution instance.
@@ -7832,6 +7882,203 @@ ur_result_t UR_APICALL urCommandBufferEnqueueExp(
 
     return pfnEnqueueExp(hCommandBuffer, hQueue, numEventsInWaitList,
                          phEventWaitList, phEvent);
+} catch (...) {
+    return exceptionToResult(std::current_exception());
+}
+
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Increment the command object's reference count.
+///
+/// @returns
+///     - ::UR_RESULT_SUCCESS
+///     - ::UR_RESULT_ERROR_UNINITIALIZED
+///     - ::UR_RESULT_ERROR_DEVICE_LOST
+///     - ::UR_RESULT_ERROR_ADAPTER_SPECIFIC
+///     - ::UR_RESULT_ERROR_INVALID_NULL_HANDLE
+///         + `NULL == hCommand`
+///     - ::UR_RESULT_ERROR_INVALID_COMMAND_BUFFER_COMMAND_HANDLE_EXP
+///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
+///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
+ur_result_t UR_APICALL urCommandBufferRetainCommandExp(
+    ur_exp_command_buffer_command_handle_t
+        hCommand ///< [in] Handle of the command-buffer command.
+    ) try {
+    auto pfnRetainCommandExp =
+        ur_lib::context->urDdiTable.CommandBufferExp.pfnRetainCommandExp;
+    if (nullptr == pfnRetainCommandExp) {
+        return UR_RESULT_ERROR_UNINITIALIZED;
+    }
+
+    return pfnRetainCommandExp(hCommand);
+} catch (...) {
+    return exceptionToResult(std::current_exception());
+}
+
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Decrement the command object's reference count and delete the command
+///        object if the reference count becomes zero.
+///
+/// @returns
+///     - ::UR_RESULT_SUCCESS
+///     - ::UR_RESULT_ERROR_UNINITIALIZED
+///     - ::UR_RESULT_ERROR_DEVICE_LOST
+///     - ::UR_RESULT_ERROR_ADAPTER_SPECIFIC
+///     - ::UR_RESULT_ERROR_INVALID_NULL_HANDLE
+///         + `NULL == hCommand`
+///     - ::UR_RESULT_ERROR_INVALID_COMMAND_BUFFER_COMMAND_HANDLE_EXP
+///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
+///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
+ur_result_t UR_APICALL urCommandBufferReleaseCommandExp(
+    ur_exp_command_buffer_command_handle_t
+        hCommand ///< [in] Handle of the command-buffer command.
+    ) try {
+    auto pfnReleaseCommandExp =
+        ur_lib::context->urDdiTable.CommandBufferExp.pfnReleaseCommandExp;
+    if (nullptr == pfnReleaseCommandExp) {
+        return UR_RESULT_ERROR_UNINITIALIZED;
+    }
+
+    return pfnReleaseCommandExp(hCommand);
+} catch (...) {
+    return exceptionToResult(std::current_exception());
+}
+
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Update a kernel launch command in a finalized command-buffer.
+///
+/// @returns
+///     - ::UR_RESULT_SUCCESS
+///     - ::UR_RESULT_ERROR_UNINITIALIZED
+///     - ::UR_RESULT_ERROR_DEVICE_LOST
+///     - ::UR_RESULT_ERROR_ADAPTER_SPECIFIC
+///     - ::UR_RESULT_ERROR_INVALID_NULL_HANDLE
+///         + `NULL == hCommand`
+///     - ::UR_RESULT_ERROR_INVALID_NULL_POINTER
+///         + `NULL == pUpdateKernelLaunch`
+///     - ::UR_RESULT_ERROR_UNSUPPORTED_FEATURE
+///         + If update functionality is not supported by the device.
+///     - ::UR_RESULT_ERROR_INVALID_OPERATION
+///         + If ::ur_exp_command_buffer_desc_t::isUpdatable was not set to true on creation of the command buffer `hCommand` belongs to.
+///         + If the command-buffer `hCommand` belongs to has not been finalized.
+///     - ::UR_RESULT_ERROR_INVALID_COMMAND_BUFFER_COMMAND_HANDLE_EXP
+///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
+///     - ::UR_RESULT_ERROR_INVALID_KERNEL_ARGUMENT_INDEX
+///     - ::UR_RESULT_ERROR_INVALID_KERNEL_ARGUMENT_SIZE
+///     - ::UR_RESULT_ERROR_INVALID_ENUMERATION
+///     - ::UR_RESULT_ERROR_INVALID_WORK_DIMENSION
+///     - ::UR_RESULT_ERROR_INVALID_WORK_GROUP_SIZE
+///     - ::UR_RESULT_ERROR_INVALID_VALUE
+///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
+///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
+ur_result_t UR_APICALL urCommandBufferUpdateKernelLaunchExp(
+    ur_exp_command_buffer_command_handle_t
+        hCommand, ///< [in] Handle of the command-buffer kernel command to update.
+    const ur_exp_command_buffer_update_kernel_launch_desc_t *
+        pUpdateKernelLaunch ///< [in] Struct defining how the kernel command is to be updated.
+    ) try {
+    auto pfnUpdateKernelLaunchExp =
+        ur_lib::context->urDdiTable.CommandBufferExp.pfnUpdateKernelLaunchExp;
+    if (nullptr == pfnUpdateKernelLaunchExp) {
+        return UR_RESULT_ERROR_UNINITIALIZED;
+    }
+
+    return pfnUpdateKernelLaunchExp(hCommand, pUpdateKernelLaunch);
+} catch (...) {
+    return exceptionToResult(std::current_exception());
+}
+
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Get command-buffer object information.
+///
+/// @returns
+///     - ::UR_RESULT_SUCCESS
+///     - ::UR_RESULT_ERROR_UNINITIALIZED
+///     - ::UR_RESULT_ERROR_DEVICE_LOST
+///     - ::UR_RESULT_ERROR_ADAPTER_SPECIFIC
+///     - ::UR_RESULT_ERROR_INVALID_NULL_HANDLE
+///         + `NULL == hCommandBuffer`
+///     - ::UR_RESULT_ERROR_INVALID_ENUMERATION
+///         + `::UR_EXP_COMMAND_BUFFER_INFO_REFERENCE_COUNT < propName`
+///     - ::UR_RESULT_ERROR_UNSUPPORTED_ENUMERATION
+///         + If `propName` is not supported by the adapter.
+///     - ::UR_RESULT_ERROR_INVALID_SIZE
+///         + `propSize == 0 && pPropValue != NULL`
+///         + If `propSize` is less than the real number of bytes needed to return the info.
+///     - ::UR_RESULT_ERROR_INVALID_NULL_POINTER
+///         + `propSize != 0 && pPropValue == NULL`
+///         + `pPropValue == NULL && pPropSizeRet == NULL`
+///     - ::UR_RESULT_ERROR_INVALID_COMMAND_BUFFER_EXP
+///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
+///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
+ur_result_t UR_APICALL urCommandBufferGetInfoExp(
+    ur_exp_command_buffer_handle_t
+        hCommandBuffer, ///< [in] handle of the command-buffer object
+    ur_exp_command_buffer_info_t
+        propName, ///< [in] the name of the command-buffer property to query
+    size_t
+        propSize, ///< [in] size in bytes of the command-buffer property value
+    void *
+        pPropValue, ///< [out][optional][typename(propName, propSize)] value of the
+                    ///< command-buffer property
+    size_t *
+        pPropSizeRet ///< [out][optional] bytes returned in command-buffer property
+    ) try {
+    auto pfnGetInfoExp =
+        ur_lib::context->urDdiTable.CommandBufferExp.pfnGetInfoExp;
+    if (nullptr == pfnGetInfoExp) {
+        return UR_RESULT_ERROR_UNINITIALIZED;
+    }
+
+    return pfnGetInfoExp(hCommandBuffer, propName, propSize, pPropValue,
+                         pPropSizeRet);
+} catch (...) {
+    return exceptionToResult(std::current_exception());
+}
+
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Get command-buffer object information.
+///
+/// @returns
+///     - ::UR_RESULT_SUCCESS
+///     - ::UR_RESULT_ERROR_UNINITIALIZED
+///     - ::UR_RESULT_ERROR_DEVICE_LOST
+///     - ::UR_RESULT_ERROR_ADAPTER_SPECIFIC
+///     - ::UR_RESULT_ERROR_INVALID_NULL_HANDLE
+///         + `NULL == hCommand`
+///     - ::UR_RESULT_ERROR_INVALID_ENUMERATION
+///         + `::UR_EXP_COMMAND_BUFFER_COMMAND_INFO_REFERENCE_COUNT < propName`
+///     - ::UR_RESULT_ERROR_UNSUPPORTED_ENUMERATION
+///         + If `propName` is not supported by the adapter.
+///     - ::UR_RESULT_ERROR_INVALID_SIZE
+///         + `propSize == 0 && pPropValue != NULL`
+///         + If `propSize` is less than the real number of bytes needed to return the info.
+///     - ::UR_RESULT_ERROR_INVALID_NULL_POINTER
+///         + `propSize != 0 && pPropValue == NULL`
+///         + `pPropValue == NULL && pPropSizeRet == NULL`
+///     - ::UR_RESULT_ERROR_INVALID_COMMAND_BUFFER_COMMAND_HANDLE_EXP
+///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
+///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
+ur_result_t UR_APICALL urCommandBufferCommandGetInfoExp(
+    ur_exp_command_buffer_command_handle_t
+        hCommand, ///< [in] handle of the command-buffer command object
+    ur_exp_command_buffer_command_info_t
+        propName, ///< [in] the name of the command-buffer command property to query
+    size_t
+        propSize, ///< [in] size in bytes of the command-buffer command property value
+    void *
+        pPropValue, ///< [out][optional][typename(propName, propSize)] value of the
+                    ///< command-buffer command property
+    size_t *
+        pPropSizeRet ///< [out][optional] bytes returned in command-buffer command property
+    ) try {
+    auto pfnCommandGetInfoExp =
+        ur_lib::context->urDdiTable.CommandBufferExp.pfnCommandGetInfoExp;
+    if (nullptr == pfnCommandGetInfoExp) {
+        return UR_RESULT_ERROR_UNINITIALIZED;
+    }
+
+    return pfnCommandGetInfoExp(hCommand, propName, propSize, pPropValue,
+                                pPropSizeRet);
 } catch (...) {
     return exceptionToResult(std::current_exception());
 }
@@ -7919,7 +8166,13 @@ ur_result_t UR_APICALL urEnqueueCooperativeKernelLaunchExp(
 ///     - ::UR_RESULT_ERROR_INVALID_KERNEL
 ur_result_t UR_APICALL urKernelSuggestMaxCooperativeGroupCountExp(
     ur_kernel_handle_t hKernel, ///< [in] handle of the kernel object
-    uint32_t *pGroupCountRet    ///< [out] pointer to maximum number of groups
+    size_t
+        localWorkSize, ///< [in] number of local work-items that will form a work-group when the
+                       ///< kernel is launched
+    size_t
+        dynamicSharedMemorySize, ///< [in] size of dynamic shared memory, for each work-group, in bytes,
+    ///< that will be used when the kernel is launched
+    uint32_t *pGroupCountRet ///< [out] pointer to maximum number of groups
     ) try {
     auto pfnSuggestMaxCooperativeGroupCountExp =
         ur_lib::context->urDdiTable.KernelExp
@@ -7928,7 +8181,8 @@ ur_result_t UR_APICALL urKernelSuggestMaxCooperativeGroupCountExp(
         return UR_RESULT_ERROR_UNINITIALIZED;
     }
 
-    return pfnSuggestMaxCooperativeGroupCountExp(hKernel, pGroupCountRet);
+    return pfnSuggestMaxCooperativeGroupCountExp(
+        hKernel, localWorkSize, dynamicSharedMemorySize, pGroupCountRet);
 } catch (...) {
     return exceptionToResult(std::current_exception());
 }

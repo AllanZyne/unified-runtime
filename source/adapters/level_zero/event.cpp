@@ -13,6 +13,7 @@
 #include <mutex>
 #include <string.h>
 
+#include "command_buffer.hpp"
 #include "common.hpp"
 #include "event.hpp"
 #include "ur_level_zero.hpp"
@@ -75,7 +76,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueEventsWait(
     bool IsInternal = OutEvent == nullptr;
     ur_event_handle_t *Event = OutEvent ? OutEvent : &InternalEvent;
     UR_CALL(createEventAndAssociateQueue(Queue, Event, UR_COMMAND_EVENTS_WAIT,
-                                         CommandList, IsInternal));
+                                         CommandList, IsInternal, false));
 
     ZeEvent = (*Event)->ZeEvent;
     (*Event)->WaitList = TmpWaitList;
@@ -102,12 +103,13 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueEventsWait(
     std::scoped_lock<ur_shared_mutex> lock(Queue->Mutex);
 
     if (OutEvent) {
-      UR_CALL(createEventAndAssociateQueue(
-          Queue, OutEvent, UR_COMMAND_EVENTS_WAIT, Queue->CommandListMap.end(),
-          /* IsInternal */ false));
+      UR_CALL(createEventAndAssociateQueue(Queue, OutEvent,
+                                           UR_COMMAND_EVENTS_WAIT,
+                                           Queue->CommandListMap.end(), false,
+                                           /* IsInternal */ false));
     }
 
-    Queue->synchronize();
+    UR_CALL(Queue->synchronize());
 
     if (OutEvent) {
       Queue->LastCommandEvent = reinterpret_cast<ur_event_handle_t>(*OutEvent);
@@ -156,7 +158,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueEventsWaitWithBarrier(
                ur_event_handle_t &Event, bool IsInternal) {
         UR_CALL(createEventAndAssociateQueue(
             Queue, &Event, UR_COMMAND_EVENTS_WAIT_WITH_BARRIER, CmdList,
-            IsInternal));
+            IsInternal, false));
 
         Event->WaitList = EventWaitList;
 
@@ -397,11 +399,15 @@ UR_APIEXPORT ur_result_t UR_APICALL urEventGetInfo(
     auto UrQueue = Event->UrQueue;
     if (UrQueue) {
       // Lock automatically releases when this goes out of scope.
-      std::scoped_lock<ur_shared_mutex> lock(UrQueue->Mutex);
-      const auto &OpenCommandList = UrQueue->eventOpenCommandList(Event);
-      if (OpenCommandList != UrQueue->CommandListMap.end()) {
-        UR_CALL(UrQueue->executeOpenCommandList(
-            OpenCommandList->second.isCopy(UrQueue)));
+      std::unique_lock<ur_shared_mutex> Lock(UrQueue->Mutex, std::try_to_lock);
+      // If we fail to acquire the lock, it's possible that the queue might
+      // already be waiting for this event in synchronize().
+      if (Lock.owns_lock()) {
+        const auto &OpenCommandList = UrQueue->eventOpenCommandList(Event);
+        if (OpenCommandList != UrQueue->CommandListMap.end()) {
+          UR_CALL(UrQueue->executeOpenCommandList(
+              OpenCommandList->second.isCopy(UrQueue)));
+        }
       }
     }
 
@@ -454,6 +460,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urEventGetProfilingInfo(
                              ///< bytes returned in propValue
 ) {
   std::shared_lock<ur_shared_mutex> EventLock(Event->Mutex);
+
   if (Event->UrQueue &&
       (Event->UrQueue->Properties & UR_QUEUE_FLAG_PROFILING_ENABLE) == 0) {
     return UR_RESULT_ERROR_PROFILING_INFO_NOT_AVAILABLE;
@@ -469,6 +476,70 @@ UR_APIEXPORT ur_result_t UR_APICALL urEventGetProfilingInfo(
   UrReturnHelper ReturnValue(PropValueSize, PropValue, PropValueSizeRet);
 
   ze_kernel_timestamp_result_t tsResult;
+
+  // A Command-buffer consists of three command-lists for which only a single
+  // event is returned to users. The actual profiling information related to the
+  // command-buffer should therefore be extrated from graph events themsleves.
+  // The timestamps of these events are saved in a memory region attached to
+  // event usning CommandData field. The timings must therefore be recovered
+  // from this memory.
+  if (Event->CommandType == UR_COMMAND_COMMAND_BUFFER_ENQUEUE_EXP) {
+    if (Event->CommandData) {
+      command_buffer_profiling_t *ProfilingsPtr;
+      switch (PropName) {
+      case UR_PROFILING_INFO_COMMAND_START: {
+        ProfilingsPtr =
+            static_cast<command_buffer_profiling_t *>(Event->CommandData);
+        // Sync-point order does not necessarily match to the order of
+        // execution. We therefore look for the first command executed.
+        uint64_t MinStart = ProfilingsPtr->Timestamps[0].global.kernelStart;
+        for (uint64_t i = 1; i < ProfilingsPtr->NumEvents; i++) {
+          uint64_t Timestamp = ProfilingsPtr->Timestamps[i].global.kernelStart;
+          if (Timestamp < MinStart) {
+            MinStart = Timestamp;
+          }
+        }
+        uint64_t ContextStartTime =
+            (MinStart & TimestampMaxValue) * ZeTimerResolution;
+        return ReturnValue(ContextStartTime);
+      }
+      case UR_PROFILING_INFO_COMMAND_END: {
+        ProfilingsPtr =
+            static_cast<command_buffer_profiling_t *>(Event->CommandData);
+        // Sync-point order does not necessarily match to the order of
+        // execution. We therefore look for the last command executed.
+        uint64_t MaxEnd = ProfilingsPtr->Timestamps[0].global.kernelEnd;
+        uint64_t LastStart = ProfilingsPtr->Timestamps[0].global.kernelStart;
+        for (uint64_t i = 1; i < ProfilingsPtr->NumEvents; i++) {
+          uint64_t Timestamp = ProfilingsPtr->Timestamps[i].global.kernelEnd;
+          if (Timestamp > MaxEnd) {
+            MaxEnd = Timestamp;
+            LastStart = ProfilingsPtr->Timestamps[i].global.kernelStart;
+          }
+        }
+        uint64_t ContextStartTime = (LastStart & TimestampMaxValue);
+        uint64_t ContextEndTime = (MaxEnd & TimestampMaxValue);
+
+        //
+        // Handle a possible wrap-around (the underlying HW counter is <
+        // 64-bit). Note, it will not report correct time if there were multiple
+        // wrap arounds, and the longer term plan is to enlarge the capacity of
+        // the HW timestamps.
+        //
+        if (ContextEndTime <= ContextStartTime) {
+          ContextEndTime += TimestampMaxValue;
+        }
+        ContextEndTime *= ZeTimerResolution;
+        return ReturnValue(ContextEndTime);
+      }
+      default:
+        urPrint("urEventGetProfilingInfo: not supported ParamName\n");
+        return UR_RESULT_ERROR_INVALID_VALUE;
+      }
+    } else {
+      return UR_RESULT_ERROR_PROFILING_INFO_NOT_AVAILABLE;
+    }
+  }
 
   switch (PropName) {
   case UR_PROFILING_INFO_COMMAND_START: {
@@ -538,7 +609,8 @@ ur_result_t ur_event_handle_t_::getOrCreateHostVisibleEvent(
     // Create a "proxy" host-visible event.
     UR_CALL(createEventAndAssociateQueue(
         UrQueue, &HostVisibleEvent, UR_EXT_COMMAND_TYPE_USER, CommandList,
-        /* IsInternal */ false, /* HostVisible */ true));
+        /* IsInternal */ false, /* IsMultiDevice */ false,
+        /* HostVisible */ true));
 
     ZE2UR_CALL(zeCommandListAppendWaitOnEvents,
                (CommandList->first, 1, &ZeEvent));
@@ -559,13 +631,13 @@ UR_APIEXPORT ur_result_t UR_APICALL urEventWait(
                        ///< events to wait for completion
 ) {
   for (uint32_t I = 0; I < NumEvents; I++) {
-    if (EventWaitList[I]->UrQueue->ZeEventsScope == OnDemandHostVisibleProxy) {
+    auto e = EventWaitList[I];
+    if (e->UrQueue && e->UrQueue->ZeEventsScope == OnDemandHostVisibleProxy) {
       // Make sure to add all host-visible "proxy" event signals if needed.
       // This ensures that all signalling commands are submitted below and
       // thus proxy events can be waited without a deadlock.
       //
-      ur_event_handle_t_ *Event =
-          ur_cast<ur_event_handle_t_ *>(EventWaitList[I]);
+      ur_event_handle_t_ *Event = ur_cast<ur_event_handle_t_ *>(e);
       if (!Event->hasExternalRefs())
         die("urEventsWait must not be called for an internal event");
 
@@ -684,7 +756,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urExtEventCreate(
     ur_event_handle_t
         *Event ///< [out] pointer to the handle of the event object created.
 ) {
-  UR_CALL(EventCreate(Context, nullptr, true, Event));
+  UR_CALL(EventCreate(Context, nullptr, false, true, Event));
 
   (*Event)->RefCountExternal++;
   ZE2UR_CALL(zeEventHostSignal, ((*Event)->ZeEvent));
@@ -702,7 +774,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urEventCreateWithNativeHandle(
   // we dont have urEventCreate, so use this check for now to know that
   // the call comes from urEventCreate()
   if (NativeEvent == nullptr) {
-    UR_CALL(EventCreate(Context, nullptr, true, Event));
+    UR_CALL(EventCreate(Context, nullptr, false, true, Event));
 
     (*Event)->RefCountExternal++;
     ZE2UR_CALL(zeEventHostSignal, ((*Event)->ZeEvent));
@@ -715,6 +787,8 @@ UR_APIEXPORT ur_result_t UR_APICALL urEventCreateWithNativeHandle(
     UREvent = new ur_event_handle_t_(ZeEvent, nullptr /* ZeEventPool */,
                                      Context, UR_EXT_COMMAND_TYPE_USER,
                                      Properties->isNativeHandleOwned);
+
+    UREvent->RefCountExternal++;
 
   } catch (const std::bad_alloc &) {
     return UR_RESULT_ERROR_OUT_OF_HOST_MEMORY;
@@ -761,6 +835,15 @@ ur_result_t urEventReleaseInternal(ur_event_handle_t Event) {
     // Free the memory allocated in the urEnqueueMemBufferMap.
     if (auto Res = ZeMemFreeHelper(Event->Context, Event->CommandData))
       return Res;
+    Event->CommandData = nullptr;
+  }
+  if (Event->CommandType == UR_COMMAND_COMMAND_BUFFER_ENQUEUE_EXP &&
+      Event->CommandData) {
+    // Free the memory extra event allocated for profiling purposed.
+    command_buffer_profiling_t *ProfilingPtr =
+        static_cast<command_buffer_profiling_t *>(Event->CommandData);
+    delete[] ProfilingPtr->Timestamps;
+    delete ProfilingPtr;
     Event->CommandData = nullptr;
   }
   if (Event->OwnNativeHandle) {
@@ -969,12 +1052,19 @@ ur_result_t CleanupCompletedEvent(ur_event_handle_t Event, bool QueueLocked,
 // a host-visible pool.
 //
 ur_result_t EventCreate(ur_context_handle_t Context, ur_queue_handle_t Queue,
-                        bool HostVisible, ur_event_handle_t *RetEvent) {
+                        bool IsMultiDevice, bool HostVisible,
+                        ur_event_handle_t *RetEvent) {
 
   bool ProfilingEnabled = !Queue || Queue->isProfilingEnabled();
 
-  if (auto CachedEvent =
-          Context->getEventFromContextCache(HostVisible, ProfilingEnabled)) {
+  ur_device_handle_t Device = nullptr;
+
+  if (!IsMultiDevice && Queue) {
+    Device = Queue->Device;
+  }
+
+  if (auto CachedEvent = Context->getEventFromContextCache(
+          HostVisible, ProfilingEnabled, Device)) {
     *RetEvent = CachedEvent;
     return UR_RESULT_SUCCESS;
   }
@@ -985,7 +1075,7 @@ ur_result_t EventCreate(ur_context_handle_t Context, ur_queue_handle_t Queue,
   size_t Index = 0;
 
   if (auto Res = Context->getFreeSlotInExistingOrNewPool(
-          ZeEventPool, Index, HostVisible, ProfilingEnabled))
+          ZeEventPool, Index, HostVisible, ProfilingEnabled, Device))
     return Res;
 
   ZeStruct<ze_event_desc_t> ZeEventDesc;
@@ -1187,9 +1277,45 @@ ur_result_t _ur_ze_event_list_t::createAndRetainUrZeEventList(
         }
 
         std::shared_lock<ur_shared_mutex> Lock(EventList[I]->Mutex);
-        this->ZeEventList[TmpListLength] = EventList[I]->ZeEvent;
-        this->UrEventList[TmpListLength] = EventList[I];
-        this->UrEventList[TmpListLength]->RefCount.increment();
+
+        if (Queue && Queue->Device != CurQueue->Device &&
+            !EventList[I]->IsMultiDevice) {
+          ze_event_handle_t MultiDeviceZeEvent = nullptr;
+          ur_event_handle_t MultiDeviceEvent;
+          bool IsInternal = true;
+          bool IsMultiDevice = true;
+
+          ur_command_list_ptr_t CommandList{};
+          UR_CALL(Queue->Context->getAvailableCommandList(Queue, CommandList,
+                                                          false, true));
+
+          UR_CALL(createEventAndAssociateQueue(
+              Queue, &MultiDeviceEvent, EventList[I]->CommandType, CommandList,
+              IsInternal, IsMultiDevice));
+          MultiDeviceZeEvent = MultiDeviceEvent->ZeEvent;
+          const auto &ZeCommandList = CommandList->first;
+          EventList[I]->RefCount.increment();
+
+          zeCommandListAppendWaitOnEvents(ZeCommandList, 1u,
+                                          &EventList[I]->ZeEvent);
+          zeEventHostSignal(MultiDeviceZeEvent);
+
+          UR_CALL(Queue->executeCommandList(CommandList, /* IsBlocking */ false,
+                                            /* OkToBatchCommand */ true));
+
+          // Acquire lock of newly created MultiDeviceEvent to increase it's
+          // RefCount
+          std::shared_lock<ur_shared_mutex> Lock(MultiDeviceEvent->Mutex);
+
+          this->ZeEventList[TmpListLength] = MultiDeviceZeEvent;
+          this->UrEventList[TmpListLength] = MultiDeviceEvent;
+          this->UrEventList[TmpListLength]->RefCount.increment();
+        } else {
+          this->ZeEventList[TmpListLength] = EventList[I]->ZeEvent;
+          this->UrEventList[TmpListLength] = EventList[I];
+          this->UrEventList[TmpListLength]->RefCount.increment();
+        }
+
         TmpListLength += 1;
       }
     }

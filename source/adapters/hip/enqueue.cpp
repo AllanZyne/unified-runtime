@@ -8,6 +8,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "enqueue.hpp"
 #include "common.hpp"
 #include "context.hpp"
 #include "event.hpp"
@@ -15,26 +16,7 @@
 #include "memory.hpp"
 #include "queue.hpp"
 
-namespace {
-
-static size_t imageElementByteSize(hipArray_Format ArrayFormat) {
-  switch (ArrayFormat) {
-  case HIP_AD_FORMAT_UNSIGNED_INT8:
-  case HIP_AD_FORMAT_SIGNED_INT8:
-    return 1;
-  case HIP_AD_FORMAT_UNSIGNED_INT16:
-  case HIP_AD_FORMAT_SIGNED_INT16:
-  case HIP_AD_FORMAT_HALF:
-    return 2;
-  case HIP_AD_FORMAT_UNSIGNED_INT32:
-  case HIP_AD_FORMAT_SIGNED_INT32:
-  case HIP_AD_FORMAT_FLOAT:
-    return 4;
-  default:
-    detail::ur::die("Invalid image format.");
-  }
-  return 0;
-}
+extern size_t imageElementByteSize(hipArray_Format ArrayFormat);
 
 ur_result_t enqueueEventsWait(ur_queue_handle_t, hipStream_t Stream,
                               uint32_t NumEventsInWaitList,
@@ -84,6 +66,79 @@ void simpleGuessLocalWorkSize(size_t *ThreadsPerBlock,
     --ThreadsPerBlock[0];
   }
 }
+
+namespace {
+
+ur_result_t setHipMemAdvise(const void *DevPtr, const size_t Size,
+                            ur_usm_advice_flags_t URAdviceFlags,
+                            hipDevice_t Device) {
+  // Handle unmapped memory advice flags
+  if (URAdviceFlags &
+      (UR_USM_ADVICE_FLAG_SET_NON_ATOMIC_MOSTLY |
+       UR_USM_ADVICE_FLAG_CLEAR_NON_ATOMIC_MOSTLY |
+       UR_USM_ADVICE_FLAG_BIAS_CACHED | UR_USM_ADVICE_FLAG_BIAS_UNCACHED
+#if !defined(__HIP_PLATFORM_AMD__)
+       | UR_USM_ADVICE_FLAG_SET_NON_COHERENT_MEMORY |
+       UR_USM_ADVICE_FLAG_CLEAR_NON_COHERENT_MEMORY
+#endif
+       )) {
+    return UR_RESULT_ERROR_INVALID_ENUMERATION;
+  }
+
+  using ur_to_hip_advice_t = std::pair<ur_usm_advice_flags_t, hipMemoryAdvise>;
+
+#if defined(__HIP_PLATFORM_AMD__)
+  constexpr size_t DeviceFlagCount = 8;
+#else
+  constexpr size_t DeviceFlagCount = 6;
+#endif
+  static constexpr std::array<ur_to_hip_advice_t, DeviceFlagCount>
+      URToHIPMemAdviseDeviceFlags {
+    std::make_pair(UR_USM_ADVICE_FLAG_SET_READ_MOSTLY,
+                   hipMemAdviseSetReadMostly),
+        std::make_pair(UR_USM_ADVICE_FLAG_CLEAR_READ_MOSTLY,
+                       hipMemAdviseUnsetReadMostly),
+        std::make_pair(UR_USM_ADVICE_FLAG_SET_PREFERRED_LOCATION,
+                       hipMemAdviseSetPreferredLocation),
+        std::make_pair(UR_USM_ADVICE_FLAG_CLEAR_PREFERRED_LOCATION,
+                       hipMemAdviseUnsetPreferredLocation),
+        std::make_pair(UR_USM_ADVICE_FLAG_SET_ACCESSED_BY_DEVICE,
+                       hipMemAdviseSetAccessedBy),
+        std::make_pair(UR_USM_ADVICE_FLAG_CLEAR_ACCESSED_BY_DEVICE,
+                       hipMemAdviseUnsetAccessedBy),
+#if defined(__HIP_PLATFORM_AMD__)
+        std::make_pair(UR_USM_ADVICE_FLAG_SET_NON_COHERENT_MEMORY,
+                       hipMemAdviseSetCoarseGrain),
+        std::make_pair(UR_USM_ADVICE_FLAG_CLEAR_NON_COHERENT_MEMORY,
+                       hipMemAdviseUnsetCoarseGrain),
+#endif
+  };
+  for (const auto &[URAdvice, HIPAdvice] : URToHIPMemAdviseDeviceFlags) {
+    if (URAdviceFlags & URAdvice) {
+      UR_CHECK_ERROR(hipMemAdvise(DevPtr, Size, HIPAdvice, Device));
+    }
+  }
+
+  static constexpr std::array<ur_to_hip_advice_t, 4> URToHIPMemAdviseHostFlags{
+      std::make_pair(UR_USM_ADVICE_FLAG_SET_PREFERRED_LOCATION_HOST,
+                     hipMemAdviseSetPreferredLocation),
+      std::make_pair(UR_USM_ADVICE_FLAG_CLEAR_PREFERRED_LOCATION_HOST,
+                     hipMemAdviseUnsetPreferredLocation),
+      std::make_pair(UR_USM_ADVICE_FLAG_SET_ACCESSED_BY_HOST,
+                     hipMemAdviseSetAccessedBy),
+      std::make_pair(UR_USM_ADVICE_FLAG_CLEAR_ACCESSED_BY_HOST,
+                     hipMemAdviseUnsetAccessedBy),
+  };
+
+  for (const auto &[URAdvice, HIPAdvice] : URToHIPMemAdviseHostFlags) {
+    if (URAdviceFlags & URAdvice) {
+      UR_CHECK_ERROR(hipMemAdvise(DevPtr, Size, HIPAdvice, hipCpuDeviceId));
+    }
+  }
+
+  return UR_RESULT_SUCCESS;
+}
+
 } // namespace
 
 UR_APIEXPORT ur_result_t UR_APICALL urEnqueueMemBufferWrite(
@@ -256,72 +311,25 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueKernelLaunch(
   // Set the number of threads per block to the number of threads per warp
   // by default unless user has provided a better number
   size_t ThreadsPerBlock[3] = {32u, 1u, 1u};
-  size_t MaxWorkGroupSize = 0u;
-  size_t MaxThreadsPerBlock[3] = {};
-  bool ProvidedLocalWorkGroupSize = (pLocalWorkSize != nullptr);
-
-  {
-    ur_result_t Result = urDeviceGetInfo(
-        hQueue->Device, UR_DEVICE_INFO_MAX_WORK_ITEM_SIZES,
-        sizeof(MaxThreadsPerBlock), MaxThreadsPerBlock, nullptr);
-    UR_ASSERT(Result == UR_RESULT_SUCCESS, Result);
-
-    Result =
-        urDeviceGetInfo(hQueue->Device, UR_DEVICE_INFO_MAX_WORK_GROUP_SIZE,
-                        sizeof(MaxWorkGroupSize), &MaxWorkGroupSize, nullptr);
-    UR_ASSERT(Result == UR_RESULT_SUCCESS, Result);
-
-    // The MaxWorkGroupSize = 1024 for AMD GPU
-    // The MaxThreadsPerBlock = {1024, 1024, 1024}
-
-    if (ProvidedLocalWorkGroupSize) {
-      auto isValid = [&](int dim) {
-        UR_ASSERT(pLocalWorkSize[dim] <= MaxThreadsPerBlock[dim],
-                  UR_RESULT_ERROR_INVALID_WORK_GROUP_SIZE);
-        // Checks that local work sizes are a divisor of the global work sizes
-        // which includes that the local work sizes are neither larger than the
-        // global work sizes and not 0.
-        UR_ASSERT(pLocalWorkSize != 0, UR_RESULT_ERROR_INVALID_WORK_GROUP_SIZE);
-        UR_ASSERT((pGlobalWorkSize[dim] % pLocalWorkSize[dim]) == 0,
-                  UR_RESULT_ERROR_INVALID_WORK_GROUP_SIZE);
-        ThreadsPerBlock[dim] = pLocalWorkSize[dim];
-        return UR_RESULT_SUCCESS;
-      };
-
-      for (size_t dim = 0; dim < workDim; dim++) {
-        auto err = isValid(dim);
-        if (err != UR_RESULT_SUCCESS)
-          return err;
-      }
-    } else {
-      simpleGuessLocalWorkSize(ThreadsPerBlock, pGlobalWorkSize,
-                               MaxThreadsPerBlock, hKernel);
-    }
-  }
-
-  UR_ASSERT(MaxWorkGroupSize >= size_t(ThreadsPerBlock[0] * ThreadsPerBlock[1] *
-                                       ThreadsPerBlock[2]),
-            UR_RESULT_ERROR_INVALID_WORK_GROUP_SIZE);
-
   size_t BlocksPerGrid[3] = {1u, 1u, 1u};
-
-  for (size_t i = 0; i < workDim; i++) {
-    BlocksPerGrid[i] =
-        (pGlobalWorkSize[i] + ThreadsPerBlock[i] - 1) / ThreadsPerBlock[i];
-  }
 
   ur_result_t Result = UR_RESULT_SUCCESS;
   std::unique_ptr<ur_event_handle_t_> RetImplEvent{nullptr};
 
   try {
     ur_device_handle_t Dev = hQueue->getDevice();
+
+    hipFunction_t HIPFunc = hKernel->get();
+    UR_CHECK_ERROR(setKernelParams(Dev, workDim, pGlobalWorkOffset,
+                                   pGlobalWorkSize, pLocalWorkSize, hKernel,
+                                   HIPFunc, ThreadsPerBlock, BlocksPerGrid));
+
     ScopedContext Active(Dev);
 
     uint32_t StreamToken;
     ur_stream_quard Guard;
     hipStream_t HIPStream = hQueue->getNextComputeStream(
         numEventsInWaitList, phEventWaitList, Guard, &StreamToken);
-    hipFunction_t HIPFunc = hKernel->get();
 
     if (DepEvents.size()) {
       UR_CHECK_ERROR(enqueueEventsWait(hQueue, HIPStream, DepEvents.size(),
@@ -333,22 +341,6 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueKernelLaunch(
       for (auto &MemArg : hKernel->Args.MemObjArgs) {
         migrateMemoryToDeviceIfNeeded(MemArg.Mem, hQueue->getDevice());
       }
-    }
-
-    // Set the implicit global offset parameter if kernel has offset variant
-    if (hKernel->getWithOffsetParameter()) {
-      std::uint32_t hip_implicit_offset[3] = {0, 0, 0};
-      if (pGlobalWorkOffset) {
-        for (size_t i = 0; i < workDim; i++) {
-          hip_implicit_offset[i] =
-              static_cast<std::uint32_t>(pGlobalWorkOffset[i]);
-          if (pGlobalWorkOffset[i] != 0) {
-            HIPFunc = hKernel->getWithOffsetParameter();
-          }
-        }
-      }
-      hKernel->setImplicitOffsetArg(sizeof(hip_implicit_offset),
-                                    hip_implicit_offset);
     }
 
     auto ArgIndices = hKernel->getArgIndices();
@@ -374,34 +366,6 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueKernelLaunch(
       MemMigrationLocks.clear();
     }
 
-    // Set local mem max size if env var is present
-    static const char *LocalMemSzPtrUR =
-        std::getenv("UR_HIP_MAX_LOCAL_MEM_SIZE");
-    static const char *LocalMemSzPtrPI =
-        std::getenv("SYCL_PI_HIP_MAX_LOCAL_MEM_SIZE");
-    static const char *LocalMemSzPtr =
-        LocalMemSzPtrUR ? LocalMemSzPtrUR
-                        : (LocalMemSzPtrPI ? LocalMemSzPtrPI : nullptr);
-
-    if (LocalMemSzPtr) {
-      int DeviceMaxLocalMem = 0;
-      UR_CHECK_ERROR(hipDeviceGetAttribute(
-          &DeviceMaxLocalMem, hipDeviceAttributeMaxSharedMemoryPerBlock,
-          Dev->get()));
-
-      static const int EnvVal = std::atoi(LocalMemSzPtr);
-      if (EnvVal <= 0 || EnvVal > DeviceMaxLocalMem) {
-        setErrorMessage(LocalMemSzPtrUR ? "Invalid value specified for "
-                                          "UR_HIP_MAX_LOCAL_MEM_SIZE"
-                                        : "Invalid value specified for "
-                                          "SYCL_PI_HIP_MAX_LOCAL_MEM_SIZE",
-                        UR_RESULT_ERROR_ADAPTER_SPECIFIC);
-        return UR_RESULT_ERROR_ADAPTER_SPECIFIC;
-      }
-      UR_CHECK_ERROR(hipFuncSetAttribute(
-          HIPFunc, hipFuncAttributeMaxDynamicSharedMemorySize, EnvVal));
-    }
-
     UR_CHECK_ERROR(hipModuleLaunchKernel(
         HIPFunc, BlocksPerGrid[0], BlocksPerGrid[1], BlocksPerGrid[2],
         ThreadsPerBlock[0], ThreadsPerBlock[1], ThreadsPerBlock[2],
@@ -417,6 +381,16 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueKernelLaunch(
     Result = err;
   }
   return Result;
+}
+
+UR_APIEXPORT ur_result_t UR_APICALL urEnqueueCooperativeKernelLaunchExp(
+    ur_queue_handle_t hQueue, ur_kernel_handle_t hKernel, uint32_t workDim,
+    const size_t *pGlobalWorkOffset, const size_t *pGlobalWorkSize,
+    const size_t *pLocalWorkSize, uint32_t numEventsInWaitList,
+    const ur_event_handle_t *phEventWaitList, ur_event_handle_t *phEvent) {
+  return urEnqueueKernelLaunch(hQueue, hKernel, workDim, pGlobalWorkOffset,
+                               pGlobalWorkSize, pLocalWorkSize,
+                               numEventsInWaitList, phEventWaitList, phEvent);
 }
 
 /// Enqueues a wait on the given queue for all events.
@@ -1015,8 +989,8 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueMemImageRead(
 
     hipArray *Array = std::get<SurfaceMem>(hImage->Mem).getArray(Device);
 
-    hipArray_Format Format;
-    size_t NumChannels;
+    hipArray_Format Format{};
+    size_t NumChannels{};
     UR_CHECK_ERROR(getArrayDesc(Array, Format, NumChannels));
 
     int ElementByteSize = imageElementByteSize(Format);
@@ -1076,8 +1050,8 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueMemImageWrite(
     hipArray *Array =
         std::get<SurfaceMem>(hImage->Mem).getArray(hQueue->getDevice());
 
-    hipArray_Format Format;
-    size_t NumChannels;
+    hipArray_Format Format{};
+    size_t NumChannels{};
     UR_CHECK_ERROR(getArrayDesc(Array, Format, NumChannels));
 
     int ElementByteSize = imageElementByteSize(Format);
@@ -1139,14 +1113,14 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueMemImageCopy(
 
     hipArray *SrcArray =
         std::get<SurfaceMem>(hImageSrc->Mem).getArray(hQueue->getDevice());
-    hipArray_Format SrcFormat;
-    size_t SrcNumChannels;
+    hipArray_Format SrcFormat{};
+    size_t SrcNumChannels{};
     UR_CHECK_ERROR(getArrayDesc(SrcArray, SrcFormat, SrcNumChannels));
 
     hipArray *DstArray =
         std::get<SurfaceMem>(hImageDst->Mem).getArray(hQueue->getDevice());
-    hipArray_Format DstFormat;
-    size_t DstNumChannels;
+    hipArray_Format DstFormat{};
+    size_t DstNumChannels{};
     UR_CHECK_ERROR(getArrayDesc(DstArray, DstFormat, DstNumChannels));
 
     UR_ASSERT(SrcFormat == DstFormat,
@@ -1403,75 +1377,11 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueUSMPrefetch(
     ur_queue_handle_t hQueue, const void *pMem, size_t size,
     ur_usm_migration_flags_t flags, uint32_t numEventsInWaitList,
     const ur_event_handle_t *phEventWaitList, ur_event_handle_t *phEvent) {
+  std::ignore = flags;
+
   void *HIPDevicePtr = const_cast<void *>(pMem);
   ur_device_handle_t Device = hQueue->getDevice();
 
-  // If the device does not support managed memory access, we can't set
-  // mem_advise.
-  if (!getAttribute(Device, hipDeviceAttributeManagedMemory)) {
-    setErrorMessage("mem_advise ignored as device does not support "
-                    " managed memory access",
-                    UR_RESULT_SUCCESS);
-    return UR_RESULT_ERROR_ADAPTER_SPECIFIC;
-  }
-
-  hipPointerAttribute_t attribs;
-  // TODO: hipPointerGetAttributes will fail if pMem is non-HIP allocated
-  // memory, as it is neither registered as host memory, nor into the address
-  // space for the current device, meaning the pMem ptr points to a
-  // system-allocated memory. This means we may need to check system-alloacted
-  // memory and handle the failure more gracefully.
-  UR_CHECK_ERROR(hipPointerGetAttributes(&attribs, pMem));
-  // async prefetch requires USM pointer (or hip SVM) to work.
-  if (!attribs.isManaged) {
-    setErrorMessage("Prefetch hint ignored as prefetch only works with USM",
-                    UR_RESULT_SUCCESS);
-    return UR_RESULT_ERROR_ADAPTER_SPECIFIC;
-  }
-
-  // HIP_POINTER_ATTRIBUTE_RANGE_SIZE is not an attribute in ROCM < 5,
-  // so we can't perform this check for such cases.
-#if HIP_VERSION_MAJOR >= 5
-  unsigned int PointerRangeSize = 0;
-  UR_CHECK_ERROR(hipPointerGetAttribute(&PointerRangeSize,
-                                        HIP_POINTER_ATTRIBUTE_RANGE_SIZE,
-                                        (hipDeviceptr_t)HIPDevicePtr));
-  UR_ASSERT(size <= PointerRangeSize, UR_RESULT_ERROR_INVALID_SIZE);
-#endif
-  // flags is currently unused so fail if set
-  if (flags != 0)
-    return UR_RESULT_ERROR_INVALID_VALUE;
-  ur_result_t Result = UR_RESULT_SUCCESS;
-  std::unique_ptr<ur_event_handle_t_> EventPtr{nullptr};
-
-  try {
-    ScopedContext Active(hQueue->getDevice());
-    hipStream_t HIPStream = hQueue->getNextTransferStream();
-    Result = enqueueEventsWait(hQueue, HIPStream, numEventsInWaitList,
-                               phEventWaitList);
-    if (phEvent) {
-      EventPtr =
-          std::unique_ptr<ur_event_handle_t_>(ur_event_handle_t_::makeNative(
-              UR_COMMAND_USM_PREFETCH, hQueue, HIPStream));
-      UR_CHECK_ERROR(EventPtr->start());
-    }
-    UR_CHECK_ERROR(
-        hipMemPrefetchAsync(pMem, size, hQueue->getDevice()->get(), HIPStream));
-    if (phEvent) {
-      UR_CHECK_ERROR(EventPtr->record());
-      *phEvent = EventPtr.release();
-    }
-  } catch (ur_result_t Err) {
-    Result = Err;
-  }
-
-  return Result;
-}
-
-UR_APIEXPORT ur_result_t UR_APICALL
-urEnqueueUSMAdvise(ur_queue_handle_t hQueue, const void *pMem, size_t size,
-                   ur_usm_advice_flags_t, ur_event_handle_t *phEvent) {
-  void *HIPDevicePtr = const_cast<void *>(pMem);
 // HIP_POINTER_ATTRIBUTE_RANGE_SIZE is not an attribute in ROCM < 5,
 // so we can't perform this check for such cases.
 #if HIP_VERSION_MAJOR >= 5
@@ -1481,9 +1391,174 @@ urEnqueueUSMAdvise(ur_queue_handle_t hQueue, const void *pMem, size_t size,
                                         (hipDeviceptr_t)HIPDevicePtr));
   UR_ASSERT(size <= PointerRangeSize, UR_RESULT_ERROR_INVALID_SIZE);
 #endif
-  // TODO implement a mapping to hipMemAdvise once the expected behaviour
-  // of urEnqueueUSMAdvise is detailed in the USM extension
-  return urEnqueueEventsWait(hQueue, 0, nullptr, phEvent);
+
+  ur_result_t Result = UR_RESULT_SUCCESS;
+
+  try {
+    ScopedContext Active(hQueue->getDevice());
+    hipStream_t HIPStream = hQueue->getNextTransferStream();
+    Result = enqueueEventsWait(hQueue, HIPStream, numEventsInWaitList,
+                               phEventWaitList);
+
+    std::unique_ptr<ur_event_handle_t_> EventPtr{nullptr};
+
+    if (phEvent) {
+      EventPtr =
+          std::unique_ptr<ur_event_handle_t_>(ur_event_handle_t_::makeNative(
+              UR_COMMAND_USM_PREFETCH, hQueue, HIPStream));
+      UR_CHECK_ERROR(EventPtr->start());
+    }
+
+    // Helper to ensure returning a valid event on early exit.
+    auto releaseEvent = [&EventPtr, &phEvent]() -> void {
+      if (phEvent) {
+        UR_CHECK_ERROR(EventPtr->record());
+        *phEvent = EventPtr.release();
+      }
+    };
+
+    // If the device does not support managed memory access, we can't set
+    // mem_advise.
+    if (!Device->getManagedMemSupport()) {
+      releaseEvent();
+      setErrorMessage("mem_advise ignored as device does not support "
+                      "managed memory access",
+                      UR_RESULT_SUCCESS);
+      return UR_RESULT_ERROR_ADAPTER_SPECIFIC;
+    }
+
+    hipPointerAttribute_t attribs;
+    // TODO: hipPointerGetAttributes will fail if pMem is non-HIP allocated
+    // memory, as it is neither registered as host memory, nor into the address
+    // space for the current device, meaning the pMem ptr points to a
+    // system-allocated memory. This means we may need to check system-alloacted
+    // memory and handle the failure more gracefully.
+    UR_CHECK_ERROR(hipPointerGetAttributes(&attribs, pMem));
+    // async prefetch requires USM pointer (or hip SVM) to work.
+    if (!attribs.isManaged) {
+      releaseEvent();
+      setErrorMessage("Prefetch hint ignored as prefetch only works with USM",
+                      UR_RESULT_SUCCESS);
+      return UR_RESULT_ERROR_ADAPTER_SPECIFIC;
+    }
+
+    UR_CHECK_ERROR(
+        hipMemPrefetchAsync(pMem, size, hQueue->getDevice()->get(), HIPStream));
+    releaseEvent();
+  } catch (ur_result_t Err) {
+    Result = Err;
+  }
+
+  return Result;
+}
+
+/// USM: memadvise API to govern behavior of automatic migration mechanisms
+UR_APIEXPORT ur_result_t UR_APICALL
+urEnqueueUSMAdvise(ur_queue_handle_t hQueue, const void *pMem, size_t size,
+                   ur_usm_advice_flags_t advice, ur_event_handle_t *phEvent) {
+  UR_ASSERT(pMem && size > 0, UR_RESULT_ERROR_INVALID_VALUE);
+  void *HIPDevicePtr = const_cast<void *>(pMem);
+  ur_device_handle_t Device = hQueue->getDevice();
+
+#if HIP_VERSION_MAJOR >= 5
+  // NOTE: The hipPointerGetAttribute API is marked as beta, meaning, while this
+  // is feature complete, it is still open to changes and outstanding issues.
+  size_t PointerRangeSize = 0;
+  UR_CHECK_ERROR(hipPointerGetAttribute(
+      &PointerRangeSize, HIP_POINTER_ATTRIBUTE_RANGE_SIZE,
+      static_cast<hipDeviceptr_t>(HIPDevicePtr)));
+  UR_ASSERT(size <= PointerRangeSize, UR_RESULT_ERROR_INVALID_SIZE);
+#endif
+
+  ur_result_t Result = UR_RESULT_SUCCESS;
+
+  try {
+    ScopedContext Active(Device);
+    std::unique_ptr<ur_event_handle_t_> EventPtr{nullptr};
+
+    if (phEvent) {
+      EventPtr =
+          std::unique_ptr<ur_event_handle_t_>(ur_event_handle_t_::makeNative(
+              UR_COMMAND_USM_ADVISE, hQueue, hQueue->getNextTransferStream()));
+      EventPtr->start();
+    }
+
+    // Helper to ensure returning a valid event on early exit.
+    auto releaseEvent = [&EventPtr, &phEvent]() -> void {
+      if (phEvent) {
+        UR_CHECK_ERROR(EventPtr->record());
+        *phEvent = EventPtr.release();
+      }
+    };
+
+    // If the device does not support managed memory access, we can't set
+    // mem_advise.
+    if (!Device->getManagedMemSupport()) {
+      releaseEvent();
+      setErrorMessage("mem_advise ignored as device does not support "
+                      "managed memory access",
+                      UR_RESULT_SUCCESS);
+      return UR_RESULT_ERROR_ADAPTER_SPECIFIC;
+    }
+
+    // Passing MEM_ADVICE_SET/MEM_ADVICE_CLEAR_PREFERRED_LOCATION to
+    // hipMemAdvise on a GPU device requires the GPU device to report a non-zero
+    // value for hipDeviceAttributeConcurrentManagedAccess. Therefore, ignore
+    // the mem advice if concurrent managed memory access is not available.
+    if (advice & (UR_USM_ADVICE_FLAG_SET_PREFERRED_LOCATION |
+                  UR_USM_ADVICE_FLAG_CLEAR_PREFERRED_LOCATION |
+                  UR_USM_ADVICE_FLAG_SET_ACCESSED_BY_DEVICE |
+                  UR_USM_ADVICE_FLAG_CLEAR_ACCESSED_BY_DEVICE |
+                  UR_USM_ADVICE_FLAG_DEFAULT)) {
+      if (!Device->getConcurrentManagedAccess()) {
+        releaseEvent();
+        setErrorMessage("mem_advise ignored as device does not support "
+                        "concurrent managed access",
+                        UR_RESULT_SUCCESS);
+        return UR_RESULT_ERROR_ADAPTER_SPECIFIC;
+      }
+
+      // TODO: If pMem points to valid system-allocated pageable memory, we
+      // should check that the device also has the
+      // hipDeviceAttributePageableMemoryAccess property, so that a valid
+      // read-only copy can be created on the device. This also applies for
+      // UR_USM_MEM_ADVICE_SET/MEM_ADVICE_CLEAR_READ_MOSTLY.
+    }
+
+    const auto DeviceID = Device->get();
+    if (advice & UR_USM_ADVICE_FLAG_DEFAULT) {
+      UR_CHECK_ERROR(
+          hipMemAdvise(pMem, size, hipMemAdviseUnsetReadMostly, DeviceID));
+      UR_CHECK_ERROR(hipMemAdvise(
+          pMem, size, hipMemAdviseUnsetPreferredLocation, DeviceID));
+      UR_CHECK_ERROR(
+          hipMemAdvise(pMem, size, hipMemAdviseUnsetAccessedBy, DeviceID));
+#if defined(__HIP_PLATFORM_AMD__)
+      UR_CHECK_ERROR(
+          hipMemAdvise(pMem, size, hipMemAdviseUnsetCoarseGrain, DeviceID));
+#endif
+    } else {
+      Result = setHipMemAdvise(HIPDevicePtr, size, advice, DeviceID);
+      // UR_RESULT_ERROR_INVALID_ENUMERATION is returned when using a valid but
+      // currently unmapped advice arguments as not supported by this platform.
+      // Therefore, warn the user instead of throwing and aborting the runtime.
+      if (Result == UR_RESULT_ERROR_INVALID_ENUMERATION) {
+        releaseEvent();
+        setErrorMessage("mem_advise is ignored as the advice argument is not "
+                        "supported by this device",
+                        UR_RESULT_SUCCESS);
+        return UR_RESULT_ERROR_ADAPTER_SPECIFIC;
+      }
+    }
+
+    releaseEvent();
+  } catch (ur_result_t err) {
+    Result = err;
+  } catch (...) {
+    Result = UR_RESULT_ERROR_UNKNOWN;
+  }
+
+  return Result;
 }
 
 UR_APIEXPORT ur_result_t UR_APICALL urEnqueueUSMFill2D(
@@ -1527,8 +1602,57 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueUSMMemcpy2D(
       UR_CHECK_ERROR(RetImplEvent->start());
     }
 
+    // There is an issue with hipMemcpy2D* when hipMemcpyDefault is used, which
+    // makes the HIP runtime not correctly derive the copy kind (direction) for
+    // the copies since ROCm 5.6.0+. See: https://github.com/ROCm/clr/issues/40
+    // TODO: Add maximum HIP_VERSION when bug has been fixed.
+#if HIP_VERSION >= 50600000
+    hipPointerAttribute_t srcAttribs{};
+    hipPointerAttribute_t dstAttribs{};
+
+    bool srcIsSystemAlloc{false};
+    bool dstIsSystemAlloc{false};
+
+    hipError_t hipRes{};
+    // hipErrorInvalidValue returned from hipPointerGetAttributes for a non-null
+    // pointer refers to an OS-allocation, hence pageable host memory. However,
+    // this means we cannot rely on the attributes result, hence we mark system
+    // pageable memory allocation manually as host memory. The HIP runtime can
+    // handle the registering/unregistering of the memory as long as the right
+    // copy-kind (direction) is provided to hipMemcpy2DAsync for this case.
+    hipRes = hipPointerGetAttributes(&srcAttribs, (const void *)pSrc);
+    if (hipRes == hipErrorInvalidValue && pSrc)
+      srcIsSystemAlloc = true;
+    hipRes = hipPointerGetAttributes(&dstAttribs, (const void *)pDst);
+    if (hipRes == hipErrorInvalidValue && pDst)
+      dstIsSystemAlloc = true;
+
+    const unsigned int srcMemType{srcAttribs.type};
+    const unsigned int dstMemType{dstAttribs.type};
+
+    const bool srcIsHost{(srcMemType == hipMemoryTypeHost) || srcIsSystemAlloc};
+    const bool srcIsDevice{srcMemType == hipMemoryTypeDevice};
+    const bool dstIsHost{(dstMemType == hipMemoryTypeHost) || dstIsSystemAlloc};
+    const bool dstIsDevice{dstMemType == hipMemoryTypeDevice};
+
+    unsigned int cpyKind{};
+    if (srcIsHost && dstIsHost)
+      cpyKind = hipMemcpyHostToHost;
+    else if (srcIsHost && dstIsDevice)
+      cpyKind = hipMemcpyHostToDevice;
+    else if (srcIsDevice && dstIsHost)
+      cpyKind = hipMemcpyDeviceToHost;
+    else if (srcIsDevice && dstIsDevice)
+      cpyKind = hipMemcpyDeviceToDevice;
+    else
+      cpyKind = hipMemcpyDefault;
+
+    UR_CHECK_ERROR(hipMemcpy2DAsync(pDst, dstPitch, pSrc, srcPitch, width,
+                                    height, (hipMemcpyKind)cpyKind, HIPStream));
+#else
     UR_CHECK_ERROR(hipMemcpy2DAsync(pDst, dstPitch, pSrc, srcPitch, width,
                                     height, hipMemcpyDefault, HIPStream));
+#endif
 
     if (phEvent) {
       UR_CHECK_ERROR(RetImplEvent->record());
@@ -1544,16 +1668,67 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueUSMMemcpy2D(
   return Result;
 }
 
+namespace {
+
+enum class GlobalVariableCopy { Read, Write };
+
+ur_result_t deviceGlobalCopyHelper(
+    ur_queue_handle_t hQueue, ur_program_handle_t hProgram, const char *name,
+    bool blocking, size_t count, size_t offset, void *ptr,
+    uint32_t numEventsInWaitList, const ur_event_handle_t *phEventWaitList,
+    ur_event_handle_t *phEvent, GlobalVariableCopy CopyType) {
+  // Since HIP requires a the global variable to be referenced by name, we use
+  // metadata to find the correct name to access it by.
+  auto DeviceGlobalNameIt = hProgram->GlobalIDMD.find(name);
+  if (DeviceGlobalNameIt == hProgram->GlobalIDMD.end())
+    return UR_RESULT_ERROR_INVALID_VALUE;
+  std::string DeviceGlobalName = DeviceGlobalNameIt->second;
+
+  try {
+    hipDeviceptr_t DeviceGlobal = 0;
+    size_t DeviceGlobalSize = 0;
+    UR_CHECK_ERROR(hipModuleGetGlobal(&DeviceGlobal, &DeviceGlobalSize,
+                                      hProgram->get(),
+                                      DeviceGlobalName.c_str()));
+
+    if (offset + count > DeviceGlobalSize)
+      return UR_RESULT_ERROR_INVALID_VALUE;
+
+    void *pSrc, *pDst;
+    if (CopyType == GlobalVariableCopy::Write) {
+      pSrc = ptr;
+      pDst = reinterpret_cast<uint8_t *>(DeviceGlobal) + offset;
+    } else {
+      pSrc = reinterpret_cast<uint8_t *>(DeviceGlobal) + offset;
+      pDst = ptr;
+    }
+    return urEnqueueUSMMemcpy(hQueue, blocking, pDst, pSrc, count,
+                              numEventsInWaitList, phEventWaitList, phEvent);
+  } catch (ur_result_t Err) {
+    return Err;
+  }
+}
+} // namespace
+
 UR_APIEXPORT ur_result_t UR_APICALL urEnqueueDeviceGlobalVariableWrite(
-    ur_queue_handle_t, ur_program_handle_t, const char *, bool, size_t, size_t,
-    const void *, uint32_t, const ur_event_handle_t *, ur_event_handle_t *) {
-  return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
+    ur_queue_handle_t hQueue, ur_program_handle_t hProgram, const char *name,
+    bool blockingWrite, size_t count, size_t offset, const void *pSrc,
+    uint32_t numEventsInWaitList, const ur_event_handle_t *phEventWaitList,
+    ur_event_handle_t *phEvent) {
+  return deviceGlobalCopyHelper(hQueue, hProgram, name, blockingWrite, count,
+                                offset, const_cast<void *>(pSrc),
+                                numEventsInWaitList, phEventWaitList, phEvent,
+                                GlobalVariableCopy::Write);
 }
 
 UR_APIEXPORT ur_result_t UR_APICALL urEnqueueDeviceGlobalVariableRead(
-    ur_queue_handle_t, ur_program_handle_t, const char *, bool, size_t, size_t,
-    void *, uint32_t, const ur_event_handle_t *, ur_event_handle_t *) {
-  return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
+    ur_queue_handle_t hQueue, ur_program_handle_t hProgram, const char *name,
+    bool blockingRead, size_t count, size_t offset, void *pDst,
+    uint32_t numEventsInWaitList, const ur_event_handle_t *phEventWaitList,
+    ur_event_handle_t *phEvent) {
+  return deviceGlobalCopyHelper(
+      hQueue, hProgram, name, blockingRead, count, offset, pDst,
+      numEventsInWaitList, phEventWaitList, phEvent, GlobalVariableCopy::Read);
 }
 
 UR_APIEXPORT ur_result_t UR_APICALL urEnqueueReadHostPipe(
@@ -1566,4 +1741,157 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueWriteHostPipe(
     ur_queue_handle_t, ur_program_handle_t, const char *, bool, void *, size_t,
     uint32_t, const ur_event_handle_t *, ur_event_handle_t *) {
   return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
+}
+
+// Helper to compute kernel parameters from workload
+// dimensions.
+// @param [in]  Device handler to the target Device
+// @param [in]  WorkDim workload dimension
+// @param [in]  GlobalWorkOffset pointer workload global offsets
+// @param [in]  GlobalWorkSize pointer workload global sizes
+// @param [in]  LocalWorkOffset pointer workload local offsets
+// @param [inout] Kernel handler to the kernel
+// @param [inout] HIPFunc handler to the HIP function attached to the kernel
+// @param [out] ThreadsPerBlock Number of threads per block we should run
+// @param [out] BlocksPerGrid Number of blocks per grid we should run
+ur_result_t
+setKernelParams(const ur_device_handle_t Device, const uint32_t WorkDim,
+                const size_t *GlobalWorkOffset, const size_t *GlobalWorkSize,
+                const size_t *LocalWorkSize, ur_kernel_handle_t &Kernel,
+                hipFunction_t &HIPFunc, size_t (&ThreadsPerBlock)[3],
+                size_t (&BlocksPerGrid)[3]) {
+  size_t MaxWorkGroupSize = 0;
+  ur_result_t Result = UR_RESULT_SUCCESS;
+  try {
+    ScopedContext Active(Device);
+    {
+      size_t MaxThreadsPerBlock[3] = {
+          static_cast<size_t>(Device->getMaxBlockDimX()),
+          static_cast<size_t>(Device->getMaxBlockDimY()),
+          static_cast<size_t>(Device->getMaxBlockDimZ())};
+
+      MaxWorkGroupSize = Device->getMaxWorkGroupSize();
+
+      if (LocalWorkSize != nullptr) {
+        auto isValid = [&](int dim) {
+          UR_ASSERT(LocalWorkSize[dim] <= MaxThreadsPerBlock[dim],
+                    UR_RESULT_ERROR_INVALID_WORK_GROUP_SIZE);
+          // Checks that local work sizes are a divisor of the global work sizes
+          // which includes that the local work sizes are neither larger than
+          // the global work sizes and not 0.
+          UR_ASSERT(LocalWorkSize != 0,
+                    UR_RESULT_ERROR_INVALID_WORK_GROUP_SIZE);
+          UR_ASSERT((GlobalWorkSize[dim] % LocalWorkSize[dim]) == 0,
+                    UR_RESULT_ERROR_INVALID_WORK_GROUP_SIZE);
+          ThreadsPerBlock[dim] = LocalWorkSize[dim];
+          return UR_RESULT_SUCCESS;
+        };
+
+        for (size_t dim = 0; dim < WorkDim; dim++) {
+          auto err = isValid(dim);
+          if (err != UR_RESULT_SUCCESS)
+            return err;
+        }
+      } else {
+        simpleGuessLocalWorkSize(ThreadsPerBlock, GlobalWorkSize,
+                                 MaxThreadsPerBlock, Kernel);
+      }
+    }
+
+    UR_ASSERT(MaxWorkGroupSize >=
+                  size_t(ThreadsPerBlock[0] * ThreadsPerBlock[1] *
+                         ThreadsPerBlock[2]),
+              UR_RESULT_ERROR_INVALID_WORK_GROUP_SIZE);
+
+    for (size_t i = 0; i < WorkDim; i++) {
+      BlocksPerGrid[i] =
+          (GlobalWorkSize[i] + ThreadsPerBlock[i] - 1) / ThreadsPerBlock[i];
+    }
+
+    // Set the implicit global offset parameter if kernel has offset variant
+    if (Kernel->getWithOffsetParameter()) {
+      std::uint32_t ImplicitOffset[3] = {0, 0, 0};
+      if (GlobalWorkOffset) {
+        for (size_t i = 0; i < WorkDim; i++) {
+          ImplicitOffset[i] = static_cast<std::uint32_t>(GlobalWorkOffset[i]);
+          if (GlobalWorkOffset[i] != 0) {
+            HIPFunc = Kernel->getWithOffsetParameter();
+          }
+        }
+      }
+      Kernel->setImplicitOffsetArg(sizeof(ImplicitOffset), ImplicitOffset);
+    }
+
+    // Set local mem max size if env var is present
+    static const char *LocalMemSzPtrUR =
+        std::getenv("UR_HIP_MAX_LOCAL_MEM_SIZE");
+    static const char *LocalMemSzPtrPI =
+        std::getenv("SYCL_PI_HIP_MAX_LOCAL_MEM_SIZE");
+    static const char *LocalMemSzPtr =
+        LocalMemSzPtrUR ? LocalMemSzPtrUR
+                        : (LocalMemSzPtrPI ? LocalMemSzPtrPI : nullptr);
+
+    if (LocalMemSzPtr) {
+      int DeviceMaxLocalMem = Device->getDeviceMaxLocalMem();
+      static const int EnvVal = std::atoi(LocalMemSzPtr);
+      if (EnvVal <= 0 || EnvVal > DeviceMaxLocalMem) {
+        setErrorMessage(LocalMemSzPtrUR ? "Invalid value specified for "
+                                          "UR_HIP_MAX_LOCAL_MEM_SIZE"
+                                        : "Invalid value specified for "
+                                          "SYCL_PI_HIP_MAX_LOCAL_MEM_SIZE",
+                        UR_RESULT_ERROR_ADAPTER_SPECIFIC);
+        return UR_RESULT_ERROR_ADAPTER_SPECIFIC;
+      }
+      UR_CHECK_ERROR(hipFuncSetAttribute(
+          HIPFunc, hipFuncAttributeMaxDynamicSharedMemorySize, EnvVal));
+    }
+  } catch (ur_result_t Err) {
+    Result = Err;
+  }
+  return Result;
+}
+
+void setCopyRectParams(ur_rect_region_t Region, const void *SrcPtr,
+                       const hipMemoryType SrcType, ur_rect_offset_t SrcOffset,
+                       size_t SrcRowPitch, size_t SrcSlicePitch, void *DstPtr,
+                       const hipMemoryType DstType, ur_rect_offset_t DstOffset,
+                       size_t DstRowPitch, size_t DstSlicePitch,
+                       hipMemcpy3DParms &Params) {
+  // Set all params to 0 first
+  std::memset(&Params, 0, sizeof(hipMemcpy3DParms));
+
+  SrcRowPitch = (!SrcRowPitch) ? Region.width + SrcOffset.x : SrcRowPitch;
+  SrcSlicePitch = (!SrcSlicePitch)
+                      ? ((Region.height + SrcOffset.y) * SrcRowPitch)
+                      : SrcSlicePitch;
+  DstRowPitch = (!DstRowPitch) ? Region.width + DstOffset.x : DstRowPitch;
+  DstSlicePitch = (!DstSlicePitch)
+                      ? ((Region.height + DstOffset.y) * DstRowPitch)
+                      : DstSlicePitch;
+
+  Params.extent.depth = Region.depth;
+  Params.extent.height = Region.height;
+  Params.extent.width = Region.width;
+
+  Params.srcPtr.ptr = const_cast<void *>(SrcPtr);
+  Params.srcPtr.pitch = SrcRowPitch;
+  Params.srcPtr.xsize = SrcRowPitch;
+  Params.srcPtr.ysize = SrcSlicePitch / SrcRowPitch;
+  Params.srcPos.x = SrcOffset.x;
+  Params.srcPos.y = SrcOffset.y;
+  Params.srcPos.z = SrcOffset.z;
+
+  Params.dstPtr.ptr = const_cast<void *>(DstPtr);
+  Params.dstPtr.pitch = DstRowPitch;
+  Params.dstPtr.xsize = DstRowPitch;
+  Params.dstPtr.ysize = DstSlicePitch / DstRowPitch;
+  Params.dstPos.x = DstOffset.x;
+  Params.dstPos.y = DstOffset.y;
+  Params.dstPos.z = DstOffset.z;
+
+  Params.kind = (SrcType == hipMemoryTypeDevice
+                     ? (DstType == hipMemoryTypeDevice ? hipMemcpyDeviceToDevice
+                                                       : hipMemcpyDeviceToHost)
+                     : (DstType == hipMemoryTypeDevice ? hipMemcpyHostToDevice
+                                                       : hipMemcpyHostToHost));
 }

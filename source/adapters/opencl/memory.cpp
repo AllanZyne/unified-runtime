@@ -251,7 +251,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urMemBufferCreate(
         case UR_STRUCTURE_TYPE_BUFFER_ALLOC_LOCATION_PROPERTIES: {
           auto BufferLocationProperty =
               reinterpret_cast<ur_buffer_alloc_location_properties_t *>(Prop);
-          PropertiesIntel.push_back(CL_MEM_ALLOC_FLAGS_INTEL);
+          PropertiesIntel.push_back(CL_MEM_ALLOC_BUFFER_LOCATION_INTEL);
           PropertiesIntel.push_back(BufferLocationProperty->location);
         } break;
         default:
@@ -331,8 +331,8 @@ UR_APIEXPORT ur_result_t UR_APICALL urMemBufferPartition(
   return mapCLErrorToUR(RetErr);
 }
 
-UR_APIEXPORT ur_result_t UR_APICALL
-urMemGetNativeHandle(ur_mem_handle_t hMem, ur_native_handle_t *phNativeMem) {
+UR_APIEXPORT ur_result_t UR_APICALL urMemGetNativeHandle(
+    ur_mem_handle_t hMem, ur_device_handle_t, ur_native_handle_t *phNativeMem) {
   return getNativeHandle(hMem, phNativeMem);
 }
 

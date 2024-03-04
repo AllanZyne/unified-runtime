@@ -15,6 +15,7 @@
 #include "context.hpp"
 #include "device.hpp"
 #include "platform.hpp"
+#include "ur_util.hpp"
 #include "usm.hpp"
 
 /// USM: Implements USM Host allocations using HIP Pinned Memory
@@ -77,9 +78,10 @@ USMFreeImpl([[maybe_unused]] ur_context_handle_t hContext, void *pMem) {
 #else
     const auto Type = hipPointerAttributeType.memoryType;
 #endif
-    UR_ASSERT(Type == hipMemoryTypeDevice || Type == hipMemoryTypeHost,
+    UR_ASSERT(Type == hipMemoryTypeDevice || Type == hipMemoryTypeHost ||
+                  Type == hipMemoryTypeManaged,
               UR_RESULT_ERROR_INVALID_MEM_OBJECT);
-    if (Type == hipMemoryTypeDevice) {
+    if (Type == hipMemoryTypeDevice || Type == hipMemoryTypeManaged) {
       UR_CHECK_ERROR(hipFree(pMem));
     }
     if (Type == hipMemoryTypeHost) {
@@ -190,12 +192,7 @@ urUSMGetMemAllocInfo(ur_context_handle_t hContext, const void *pMem,
         return ReturnValue(UR_USM_TYPE_HOST);
       }
       // should never get here
-#ifdef _MSC_VER
-      __assume(0);
-#else
-      __builtin_unreachable();
-#endif
-      return ReturnValue(UR_USM_TYPE_UNKNOWN);
+      ur::unreachable();
     }
     case UR_USM_ALLOC_INFO_DEVICE: {
       // get device index associated with this pointer
@@ -348,29 +345,29 @@ ur_usm_pool_handle_t_::ur_usm_pool_handle_t_(ur_context_handle_t Context,
           .second;
 
   HostMemPool =
-      umf::poolMakeUnique<usm::DisjointPool, 1>(
-          {std::move(MemProvider)},
-          this->DisjointPoolConfigs.Configs[usm::DisjointPoolMemType::Host])
+      umf::poolMakeUniqueFromOps(
+          &UMF_DISJOINT_POOL_OPS, std::move(MemProvider),
+          &this->DisjointPoolConfigs.Configs[usm::DisjointPoolMemType::Host])
           .second;
 
   for (const auto &Device : Context->getDevices()) {
     MemProvider =
         umf::memoryProviderMakeUnique<USMDeviceMemoryProvider>(Context, Device)
             .second;
-    DeviceMemPool =
-        umf::poolMakeUnique<usm::DisjointPool, 1>(
-            {std::move(MemProvider)},
-            this->DisjointPoolConfigs.Configs[usm::DisjointPoolMemType::Device])
-            .second;
+    DeviceMemPool = umf::poolMakeUniqueFromOps(
+                        &UMF_DISJOINT_POOL_OPS, std::move(MemProvider),
+                        &this->DisjointPoolConfigs
+                             .Configs[usm::DisjointPoolMemType::Device])
+                        .second;
 
     MemProvider =
         umf::memoryProviderMakeUnique<USMSharedMemoryProvider>(Context, Device)
             .second;
-    SharedMemPool =
-        umf::poolMakeUnique<usm::DisjointPool, 1>(
-            {std::move(MemProvider)},
-            this->DisjointPoolConfigs.Configs[usm::DisjointPoolMemType::Shared])
-            .second;
+    SharedMemPool = umf::poolMakeUniqueFromOps(
+                        &UMF_DISJOINT_POOL_OPS, std::move(MemProvider),
+                        &this->DisjointPoolConfigs
+                             .Configs[usm::DisjointPoolMemType::Shared])
+                        .second;
     Context->addPool(this);
   }
 }

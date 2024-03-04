@@ -4,8 +4,6 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 set(UR_CONFORMANCE_TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR})
-option(UR_TEST_DEVICES_COUNT "Count of devices on which CTS will be run" 1)
-option(UR_TEST_PLATFORMS_COUNT "Count of platforms on which CTS will be run" 1)
 
 function(add_test_adapter name adapter)
     set(TEST_TARGET_NAME test-${name})
@@ -39,7 +37,8 @@ function(add_conformance_test name)
         ${PROJECT_NAME}::headers
         ${PROJECT_NAME}::testing
         ${PROJECT_NAME}::common
-        GTest::gtest_main)
+        GTest::gtest_main
+        unit_tests_helpers)
 
     if(UR_BUILD_ADAPTER_CUDA OR UR_BUILD_ADAPTER_ALL)
         add_test_adapter(${name} adapter_cuda)
@@ -102,19 +101,25 @@ if(UR_DPCXX)
         "${CMAKE_CURRENT_BINARY_DIR}/device_binaries" CACHE INTERNAL UR_CONFORMANCE_DEVICE_BINARIES_DIR)
     file(MAKE_DIRECTORY ${UR_CONFORMANCE_DEVICE_BINARIES_DIR})
 
-    if(NOT "${UR_CONFORMANCE_TARGET_TRIPLES}" STREQUAL "")
-        string(REPLACE "," ";" TARGET_TRIPLES ${UR_CONFORMANCE_TARGET_TRIPLES})
+    if("${UR_CONFORMANCE_TARGET_TRIPLES}" STREQUAL "")
+        if(UR_BUILD_ADAPTER_L0 OR UR_BUILD_ADAPTER_OPENCL OR UR_BUILD_ADAPTER_ALL)
+            list(APPEND TARGET_TRIPLES "spir64")
+        endif()
+        if(UR_BUILD_ADAPTER_CUDA OR UR_BUILD_ADAPTER_ALL)
+            list(APPEND TARGET_TRIPLES "nvptx64-nvidia-cuda")
+        endif()
+        if(UR_BUILD_ADAPTER_HIP OR UR_BUILD_ADAPTER_ALL)
+            list(APPEND TARGET_TRIPLES "amdgcn-amd-amdhsa")
+        endif()
     else()
-        message(WARNING
-            "UR_CONFORMANCE_TARGET_TRIPLES wasn't set, defaulting to only \
-            generate spir64 device binaries")
-        list(APPEND TARGET_TRIPLES "spir64")
+        string(REPLACE "," ";" TARGET_TRIPLES ${UR_CONFORMANCE_TARGET_TRIPLES})
     endif()
 
     add_subdirectory(device_code)
     add_subdirectory(kernel)
     add_subdirectory(program)
     add_subdirectory(enqueue)
+    add_subdirectory(exp_command_buffer)
 else()
     message(WARNING
         "UR_DPCXX is not defined, the following conformance test executables \

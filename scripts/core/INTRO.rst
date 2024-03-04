@@ -148,9 +148,12 @@ This allows the Unified Runtime shared library to be updated with additional sym
 Printing API
 ------------
 ## --validate=off
-The header "${x}_print.hpp" contains the "${x}::print" namespace with the output stream operator (<<) overloads for Unified Runtime objects.
+The header "${x}_print.hpp" contains output stream operator (<<) overloads for Unified Runtime objects.
 There is also the "${x}::extras::printFunctionParams" function for printing function parameters. These parameters have to be provided in a \*params_t struct format suitable for
 a given function.
+
+The ${x}_print.h header provides the same functionality with a C interface. Each object has a print function named urPrint<object name without both prefix and suffix>,
+ie. for printing ur_result_t use urPrintResult.
 ## --validate=on
 
 Tracing
@@ -265,6 +268,8 @@ Layers currently included with the runtime are as follows:
      - Enables non-adapter-specific parameter validation (e.g. checking for null values).
    * - UR_LAYER_LEAK_CHECKING
      - Performs some leak checking for API calls involving object creation/destruction.
+   * - UR_LAYER_LIFETIME_VALIDATION
+     - Performs lifetime validation on objects (check if it was used within the scope of its creation and destruction) used in API calls. Automatically enables UR_LAYER_LEAK_CHECKING.
    * - UR_LAYER_FULL_VALIDATION
      - Enables UR_LAYER_PARAMETER_VALIDATION and UR_LAYER_LEAK_CHECKING.
    * - UR_LAYER_TRACING

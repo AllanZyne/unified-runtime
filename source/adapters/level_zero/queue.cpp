@@ -281,35 +281,6 @@ UR_APIEXPORT ur_result_t UR_APICALL urQueueCreate(
     ur_queue_handle_t
         *Queue ///< [out] pointer to handle of queue object created
 ) {
-
-  // Make the Device appear as the first device in the context since this
-  // is where the urProgramBuild will only build the module to. Also, if
-  // the Device is a sub-device then see if there is a also its root-device
-  // in the context and make that go first instead (because sub-device can
-  // run code built for its root-device).
-  //
-  // TODO: this is all hacky and should be removed when we add support
-  // for building to all the devices in the context.
-  //
-  { // Lock context for thread-safe update
-    std::scoped_lock<ur_shared_mutex> Lock(Context->Mutex);
-    UR_ASSERT(Context->isValidDevice(Device), UR_RESULT_ERROR_INVALID_DEVICE);
-
-    auto MakeFirst = Context->Devices.begin();
-    for (auto I = Context->Devices.begin(); I != Context->Devices.end(); ++I) {
-      if (*I == Device) {
-        MakeFirst = I;
-        if (!Device->RootDevice)
-          break;
-        // continue the search for possible root-device in the context
-      } else if (*I == Device->RootDevice) {
-        MakeFirst = I;
-        break; // stop the search
-      }
-    }
-    if (MakeFirst != Context->Devices.begin())
-      std::iter_swap(MakeFirst, Context->Devices.begin());
-  }
   ur_queue_flags_t Flags{};
   if (Props) {
     Flags = Props->flags;
@@ -327,6 +298,8 @@ UR_APIEXPORT ur_result_t UR_APICALL urQueueCreate(
       }
     }
   }
+
+  UR_ASSERT(Context->isValidDevice(Device), UR_RESULT_ERROR_INVALID_DEVICE);
 
   // Create placeholder queues in the compute queue group.
   // Actual L0 queues will be created at first use.
@@ -434,11 +407,11 @@ UR_APIEXPORT ur_result_t UR_APICALL urQueueRelease(
     //
     // It is possible to get to here and still have an open command list
     // if no wait or finish ever occurred for this queue.
-    if (auto Res = Queue->executeAllOpenCommandLists())
-      return Res;
+    auto Res = Queue->executeAllOpenCommandLists();
 
     // Make sure all commands get executed.
-    Queue->synchronize();
+    if (Res == UR_RESULT_SUCCESS)
+      UR_CALL(Queue->synchronize());
 
     // Destroy all the fences created associated with this queue.
     for (auto it = Queue->CommandListMap.begin();
@@ -654,7 +627,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urQueueFinish(
     // Lock automatically releases when this goes out of scope.
     std::scoped_lock<ur_shared_mutex> Lock(UrQueue->Mutex);
 
-    UrQueue->synchronize();
+    UR_CALL(UrQueue->synchronize());
   } else {
     std::unique_lock<ur_shared_mutex> Lock(UrQueue->Mutex);
     std::vector<ze_command_queue_handle_t> ZeQueues;
@@ -1153,7 +1126,8 @@ ur_queue_handle_t_::executeCommandList(ur_command_list_ptr_t CommandList,
         auto Res = createEventAndAssociateQueue(
             reinterpret_cast<ur_queue_handle_t>(this), &HostVisibleEvent,
             UR_EXT_COMMAND_TYPE_USER, CommandList,
-            /* IsInternal */ false, /* HostVisible */ true);
+            /* IsInternal */ false, /* IsMultiDevice */ true,
+            /* HostVisible */ true);
         if (Res)
           return Res;
 
@@ -1234,6 +1208,12 @@ ur_queue_handle_t_::executeCommandList(ur_command_list_ptr_t CommandList,
         // Turn into a more informative end-user error.
         return UR_RESULT_ERROR_UNKNOWN;
       }
+      // Reset Command List and erase the Fence forcing the user to resubmit
+      // their commands.
+      std::vector<ur_event_handle_t> EventListToCleanup;
+      resetCommandList(CommandList, true, EventListToCleanup, false);
+      CleanupEventListFromResetCmdList(EventListToCleanup,
+                                       true /* QueueLocked */);
       return ze2urResult(ZeResult);
     }
   }
@@ -1241,7 +1221,7 @@ ur_queue_handle_t_::executeCommandList(ur_command_list_ptr_t CommandList,
   // Check global control to make every command blocking for debugging.
   if (IsBlocking || (UrL0Serialize & UrL0SerializeBlock) != 0) {
     if (UsingImmCmdLists) {
-      synchronize();
+      UR_CALL(synchronize());
     } else {
       // Wait until command lists attached to the command queue are executed.
       ZE2UR_CALL(zeHostSynchronize, (ZeCommandQueue));
@@ -1287,8 +1267,19 @@ ur_queue_handle_t_::resetDiscardedEvent(ur_command_list_ptr_t CommandList) {
 }
 
 ur_result_t ur_queue_handle_t_::addEventToQueueCache(ur_event_handle_t Event) {
-  auto Cache = Event->isHostVisible() ? &EventCaches[0] : &EventCaches[1];
-  Cache->emplace_back(Event);
+  if (!Event->IsMultiDevice && Event->UrQueue) {
+    auto Device = Event->UrQueue->Device;
+    auto EventCachesMap = Event->isHostVisible() ? &EventCachesDeviceMap[0]
+                                                 : &EventCachesDeviceMap[1];
+    if (EventCachesMap->find(Device) == EventCachesMap->end()) {
+      EventCaches.emplace_back();
+      EventCachesMap->insert(std::make_pair(Device, EventCaches.size() - 1));
+    }
+    EventCaches[EventCachesMap->at(Device)].emplace_back(Event);
+  } else {
+    auto Cache = Event->isHostVisible() ? &EventCaches[0] : &EventCaches[1];
+    Cache->emplace_back(Event);
+  }
   return UR_RESULT_SUCCESS;
 }
 
@@ -1310,9 +1301,11 @@ ur_result_t urQueueReleaseInternal(ur_queue_handle_t Queue) {
   if (!UrQueue->RefCount.decrementAndTest())
     return UR_RESULT_SUCCESS;
 
-  for (auto &Cache : UrQueue->EventCaches)
+  for (auto &Cache : UrQueue->EventCaches) {
     for (auto &Event : Cache)
       UR_CALL(urEventReleaseInternal(Event));
+    Cache.clear();
+  }
 
   if (UrQueue->OwnZeCommandQueue) {
     for (auto &QueueMap :
@@ -1445,7 +1438,7 @@ ur_result_t ur_queue_handle_t_::synchronize() {
         for (auto &QueueGroup : QueueMap) {
           if (UsingImmCmdLists) {
             for (auto &ImmCmdList : QueueGroup.second.ImmCmdLists)
-              syncImmCmdList(this, ImmCmdList);
+              UR_CALL(syncImmCmdList(this, ImmCmdList));
           } else {
             for (auto &ZeQueue : QueueGroup.second.ZeQueues)
               if (ZeQueue)
@@ -1465,8 +1458,20 @@ ur_result_t ur_queue_handle_t_::synchronize() {
   return UR_RESULT_SUCCESS;
 }
 
-ur_event_handle_t ur_queue_handle_t_::getEventFromQueueCache(bool HostVisible) {
-  auto Cache = HostVisible ? &EventCaches[0] : &EventCaches[1];
+ur_event_handle_t ur_queue_handle_t_::getEventFromQueueCache(bool IsMultiDevice,
+                                                             bool HostVisible) {
+  std::list<ur_event_handle_t> *Cache;
+
+  if (!IsMultiDevice) {
+    auto Device = this->Device;
+    Cache = HostVisible ? &EventCaches[EventCachesDeviceMap[0][Device]]
+                        : &EventCaches[EventCachesDeviceMap[1][Device]];
+    if (!Cache) {
+      return nullptr;
+    }
+  } else {
+    Cache = HostVisible ? &EventCaches[0] : &EventCaches[1];
+  }
 
   // If we don't have any events, return nullptr.
   // If we have only a single event then it was used by the last command and we
@@ -1491,13 +1496,15 @@ ur_event_handle_t ur_queue_handle_t_::getEventFromQueueCache(bool HostVisible) {
 // \param CommandList is the command list where the event is added
 // \param IsInternal tells if the event is internal, i.e. visible in the L0
 //        plugin only.
+// \param IsMultiDevice tells if the event must be created in the multi-device
+//        visible pool.
 // \param HostVisible tells if the event must be created in the
 //        host-visible pool. If not set then this function will decide.
 ur_result_t createEventAndAssociateQueue(ur_queue_handle_t Queue,
                                          ur_event_handle_t *Event,
                                          ur_command_t CommandType,
                                          ur_command_list_ptr_t CommandList,
-                                         bool IsInternal,
+                                         bool IsInternal, bool IsMultiDevice,
                                          std::optional<bool> HostVisible) {
 
   if (!HostVisible.has_value()) {
@@ -1506,15 +1513,18 @@ ur_result_t createEventAndAssociateQueue(ur_queue_handle_t Queue,
   }
 
   // If event is discarded then try to get event from the queue cache.
-  *Event =
-      IsInternal ? Queue->getEventFromQueueCache(HostVisible.value()) : nullptr;
+  *Event = IsInternal ? Queue->getEventFromQueueCache(IsMultiDevice,
+                                                      HostVisible.value())
+                      : nullptr;
 
   if (*Event == nullptr)
-    UR_CALL(EventCreate(Queue->Context, Queue, HostVisible.value(), Event));
+    UR_CALL(EventCreate(Queue->Context, Queue, IsMultiDevice,
+                        HostVisible.value(), Event));
 
   (*Event)->UrQueue = Queue;
   (*Event)->CommandType = CommandType;
   (*Event)->IsDiscarded = IsInternal;
+  (*Event)->IsMultiDevice = IsMultiDevice;
   (*Event)->CommandList = CommandList;
   // Discarded event doesn't own ze_event, it is used by multiple
   // ur_event_handle_t objects. We destroy corresponding ze_event by releasing
@@ -1590,7 +1600,8 @@ ur_result_t ur_queue_handle_t_::signalEventFromCmdListIfLastEventDiscarded(
   UR_CALL(createEventAndAssociateQueue(
       reinterpret_cast<ur_queue_handle_t>(this), &Event,
       UR_EXT_COMMAND_TYPE_USER, CommandList,
-      /* IsInternal */ false, /* HostVisible */ false));
+      /* IsInternal */ false, /* IsMultiDevice */ true,
+      /* HostVisible */ false));
   UR_CALL(urEventReleaseInternal(Event));
   LastCommandEvent = Event;
 
@@ -1903,7 +1914,7 @@ ur_queue_handle_t_::insertActiveBarriers(ur_command_list_ptr_t &CmdList,
   if (auto Res = createEventAndAssociateQueue(
           reinterpret_cast<ur_queue_handle_t>(this), &Event,
           UR_EXT_COMMAND_TYPE_USER, CmdList,
-          /*IsInternal*/ true))
+          /* IsInternal */ true, /* IsMultiDevice */ true))
     return Res;
 
   Event->WaitList = ActiveBarriersWaitList;

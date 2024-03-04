@@ -89,6 +89,7 @@ target_sources(ur_loader
         ${CMAKE_CURRENT_SOURCE_DIR}/ur_lib.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/ur_lib.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/ur_codeloc.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/ur_print.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/layers/validation/ur_valddi.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/layers/validation/ur_validation_layer.cpp
 )
@@ -115,17 +116,10 @@ if(UR_ENABLE_SANITIZER)
         ${CMAKE_CURRENT_SOURCE_DIR}/layers/sanitizer/ur_sanddi.cpp
     )
 
-    if(WIN32)
-        target_sources(ur_loader
-            PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/layers/sanitizer/windows/check_san.cpp
-        )
-    else()
-        target_sources(ur_loader
-            PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/layers/sanitizer/linux/check_san.cpp
-        )
-    endif()
+    target_sources(ur_loader
+        PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/layers/sanitizer/linux/san_utils.cpp
+    )
 
     target_include_directories(ur_loader PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/layers/sanitizer"

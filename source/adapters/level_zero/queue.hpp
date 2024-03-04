@@ -343,6 +343,8 @@ struct ur_queue_handle_t_ : _ur_object {
   // inside all command lists in the queue as described in the 2-event model.
   // Leftover events in the cache are relased at the queue destruction.
   std::vector<std::list<ur_event_handle_t>> EventCaches{2};
+  std::vector<std::unordered_map<ur_device_handle_t, size_t>>
+      EventCachesDeviceMap{2};
 
   // adjust the queue's batch size, knowing that the current command list
   // is being closed with a full batch.
@@ -408,7 +410,7 @@ struct ur_queue_handle_t_ : _ur_object {
   bool isImmediateSubmission() const;
 
   // Wait for all commandlists associated with this Queue to finish operations.
-  ur_result_t synchronize();
+  [[nodiscard]] ur_result_t synchronize();
 
   // Get event from the queue's cache.
   // Returns nullptr if the cache doesn't contain any reusable events or if the
@@ -417,7 +419,8 @@ struct ur_queue_handle_t_ : _ur_object {
   // two times in a row and have to do round-robin between two events. Otherwise
   // it picks an event from the beginning of the cache and returns it. Event
   // from the last command is always appended to the end of the list.
-  ur_event_handle_t getEventFromQueueCache(bool HostVisible);
+  ur_event_handle_t getEventFromQueueCache(bool IsMultiDevice,
+                                           bool HostVisible);
 
   // Returns true if an OpenCommandList has commands that need to be submitted.
   // If IsCopy is 'true', then the OpenCommandList containing copy commands is
@@ -532,13 +535,14 @@ struct ur_queue_handle_t_ : _ur_object {
 // \param CommandList is the command list where the event is added
 // \param IsInternal tells if the event is internal, i.e. visible in the L0
 //        plugin only.
+// \param IsMultiDevice Indicates that this event must be visible by
+//        multiple devices.
 // \param ForceHostVisible tells if the event must be created in
 //        the host-visible pool
-ur_result_t
-createEventAndAssociateQueue(ur_queue_handle_t Queue, ur_event_handle_t *Event,
-                             ur_command_t CommandType,
-                             ur_command_list_ptr_t CommandList, bool IsInternal,
-                             std::optional<bool> HostVisible = std::nullopt);
+ur_result_t createEventAndAssociateQueue(
+    ur_queue_handle_t Queue, ur_event_handle_t *Event, ur_command_t CommandType,
+    ur_command_list_ptr_t CommandList, bool IsInternal, bool IsMultiDevice,
+    std::optional<bool> HostVisible = std::nullopt);
 
 // Helper function to perform the necessary cleanup of the events from reset cmd
 // list.

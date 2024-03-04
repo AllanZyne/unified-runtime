@@ -17,6 +17,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <string>
 
 namespace ur_sanitizer_layer {
 
@@ -29,6 +30,18 @@ using u32 = unsigned int;
 
 constexpr unsigned ASAN_SHADOW_SCALE = 3;
 constexpr unsigned ASAN_SHADOW_GRANULARITY = 1ULL << ASAN_SHADOW_SCALE;
+
+// Based on "compiler-rt/lib/asan/asan_mapping.h"
+// Typical shadow mapping on Linux/x86_64 with SHADOW_OFFSET == 0x00007fff8000:
+constexpr uptr LOW_SHADOW_BEGIN = 0x00007fff8000ULL;
+constexpr uptr LOW_SHADOW_END = 0x00008fff6fffULL;
+constexpr uptr SHADOW_GAP_BEGIN = 0x00008fff7000ULL;
+constexpr uptr SHADOW_GAP_END = 0x02008fff6fffULL;
+constexpr uptr HIGH_SHADOW_BEGIN = 0x02008fff7000ULL;
+constexpr uptr HIGH_SHADOW_END = 0x10007fff7fffULL;
+constexpr uptr LOW_SHADOW_SIZE = LOW_SHADOW_END - LOW_SHADOW_BEGIN;
+constexpr uptr SHADOW_GAP_SIZE = SHADOW_GAP_END - SHADOW_GAP_BEGIN;
+constexpr uptr HIGH_SHADOW_SIZE = HIGH_SHADOW_END - HIGH_SHADOW_BEGIN;
 
 inline constexpr bool IsPowerOfTwo(uptr x) {
     return (x & (x - 1)) == 0 && x != 0;
@@ -50,20 +63,20 @@ inline constexpr bool IsAligned(uptr a, uptr alignment) {
 
 // Valid redzone sizes are 16, 32, 64, ... 2048, so we encode them in 3 bits.
 // We use adaptive redzones: for larger allocation larger redzones are used.
-inline constexpr u32 RZLog2Size(u32 rz_log) {
+inline constexpr uptr RZLog2Size(uptr rz_log) {
     assert(rz_log < 8);
     return 16 << rz_log;
 }
 
 inline constexpr uptr ComputeRZLog(uptr user_requested_size) {
-    u32 rz_log = user_requested_size <= 64 - 16            ? 0
-                 : user_requested_size <= 128 - 32         ? 1
-                 : user_requested_size <= 512 - 64         ? 2
-                 : user_requested_size <= 4096 - 128       ? 3
-                 : user_requested_size <= (1 << 14) - 256  ? 4
-                 : user_requested_size <= (1 << 15) - 512  ? 5
-                 : user_requested_size <= (1 << 16) - 1024 ? 6
-                                                           : 7;
+    uptr rz_log = user_requested_size <= 64 - 16            ? 0
+                  : user_requested_size <= 128 - 32         ? 1
+                  : user_requested_size <= 512 - 64         ? 2
+                  : user_requested_size <= 4096 - 128       ? 3
+                  : user_requested_size <= (1 << 14) - 256  ? 4
+                  : user_requested_size <= (1 << 15) - 512  ? 5
+                  : user_requested_size <= (1 << 16) - 1024 ? 6
+                                                            : 7;
     return rz_log;
 }
 
@@ -89,12 +102,6 @@ inline constexpr uptr ComputeRZLog(uptr user_requested_size) {
 
 bool IsInASanContext();
 
-ur_context_handle_t getContext(ur_kernel_handle_t Kernel);
-ur_context_handle_t getContext(ur_queue_handle_t Queue);
-ur_context_handle_t getContext(ur_program_handle_t Program);
-ur_device_handle_t getDevice(ur_queue_handle_t Queue);
-ur_program_handle_t getProgram(ur_kernel_handle_t Kernel);
-
 class UrUSMFree {
 public:
     UrUSMFree(ur_context_handle_t Context) : m_Context(Context) {}
@@ -103,5 +110,13 @@ public:
 private:
     ur_context_handle_t m_Context;
 };
+
+bool SetupShadowMem();
+
+bool DestroyShadowMem();
+
+void *GetMemFunctionPointer(const char *);
+
+std::string DemangleName(const std::string &name);
 
 } // namespace ur_sanitizer_layer

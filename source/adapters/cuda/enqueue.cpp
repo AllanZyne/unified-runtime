@@ -114,10 +114,13 @@ ur_result_t setCuMemAdvise(CUdeviceptr DevPtr, size_t Size,
     }
   }
 
-  std::array<ur_usm_advice_flags_t, 4> UnmappedMemAdviceFlags = {
+  std::array<ur_usm_advice_flags_t, 6> UnmappedMemAdviceFlags = {
       UR_USM_ADVICE_FLAG_SET_NON_ATOMIC_MOSTLY,
       UR_USM_ADVICE_FLAG_CLEAR_NON_ATOMIC_MOSTLY,
-      UR_USM_ADVICE_FLAG_BIAS_CACHED, UR_USM_ADVICE_FLAG_BIAS_UNCACHED};
+      UR_USM_ADVICE_FLAG_BIAS_CACHED,
+      UR_USM_ADVICE_FLAG_BIAS_UNCACHED,
+      UR_USM_ADVICE_FLAG_SET_NON_COHERENT_MEMORY,
+      UR_USM_ADVICE_FLAG_CLEAR_NON_COHERENT_MEMORY};
 
   for (auto &UnmappedFlag : UnmappedMemAdviceFlags) {
     if (URAdviceFlags & UnmappedFlag) {
@@ -242,13 +245,14 @@ setKernelParams(const ur_context_handle_t Context,
           return UR_RESULT_SUCCESS;
         };
 
-        size_t KernelLocalWorkGroupSize = 0;
+        size_t KernelLocalWorkGroupSize = 1;
         for (size_t Dim = 0; Dim < WorkDim; Dim++) {
           auto Err = IsValid(Dim);
           if (Err != UR_RESULT_SUCCESS)
             return Err;
-          // If no error then sum the total local work size per dim.
-          KernelLocalWorkGroupSize += LocalWorkSize[Dim];
+          // If no error then compute the total local work size as a product of
+          // all dims.
+          KernelLocalWorkGroupSize *= LocalWorkSize[Dim];
         }
 
         if (hasExceededMaxRegistersPerBlock(Device, Kernel,
@@ -488,6 +492,16 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueKernelLaunch(
     Result = Err;
   }
   return Result;
+}
+
+UR_APIEXPORT ur_result_t UR_APICALL urEnqueueCooperativeKernelLaunchExp(
+    ur_queue_handle_t hQueue, ur_kernel_handle_t hKernel, uint32_t workDim,
+    const size_t *pGlobalWorkOffset, const size_t *pGlobalWorkSize,
+    const size_t *pLocalWorkSize, uint32_t numEventsInWaitList,
+    const ur_event_handle_t *phEventWaitList, ur_event_handle_t *phEvent) {
+  return urEnqueueKernelLaunch(hQueue, hKernel, workDim, pGlobalWorkOffset,
+                               pGlobalWorkSize, pLocalWorkSize,
+                               numEventsInWaitList, phEventWaitList, phEvent);
 }
 
 /// Set parameters for general 3D memory copy.
@@ -862,7 +876,7 @@ static size_t imageElementByteSize(CUDA_ARRAY_DESCRIPTOR ArrayDesc) {
   }
 }
 
-/// General ND memory copy operation for images (where N > 1).
+/// General ND memory copy operation for images.
 /// This function requires the corresponding CUDA context to be at the top of
 /// the context stack
 /// If the source and/or destination is an array, SrcPtr and/or DstPtr
@@ -877,14 +891,14 @@ static ur_result_t commonEnqueueMemImageNDCopy(
   UR_ASSERT(DstType == CU_MEMORYTYPE_ARRAY || DstType == CU_MEMORYTYPE_HOST,
             UR_RESULT_ERROR_INVALID_MEM_OBJECT);
 
-  if (ImgType == UR_MEM_TYPE_IMAGE2D) {
+  if (ImgType == UR_MEM_TYPE_IMAGE1D || ImgType == UR_MEM_TYPE_IMAGE2D) {
     CUDA_MEMCPY2D CpyDesc;
     memset(&CpyDesc, 0, sizeof(CpyDesc));
     CpyDesc.srcMemoryType = SrcType;
     if (SrcType == CU_MEMORYTYPE_ARRAY) {
       CpyDesc.srcArray = *static_cast<const CUarray *>(SrcPtr);
       CpyDesc.srcXInBytes = SrcOffset.x;
-      CpyDesc.srcY = SrcOffset.y;
+      CpyDesc.srcY = (ImgType == UR_MEM_TYPE_IMAGE1D) ? 0 : SrcOffset.y;
     } else {
       CpyDesc.srcHost = SrcPtr;
     }
@@ -892,12 +906,12 @@ static ur_result_t commonEnqueueMemImageNDCopy(
     if (DstType == CU_MEMORYTYPE_ARRAY) {
       CpyDesc.dstArray = *static_cast<CUarray *>(DstPtr);
       CpyDesc.dstXInBytes = DstOffset.x;
-      CpyDesc.dstY = DstOffset.y;
+      CpyDesc.dstY = (ImgType == UR_MEM_TYPE_IMAGE1D) ? 0 : DstOffset.y;
     } else {
       CpyDesc.dstHost = DstPtr;
     }
     CpyDesc.WidthInBytes = Region.width;
-    CpyDesc.Height = Region.height;
+    CpyDesc.Height = (ImgType == UR_MEM_TYPE_IMAGE1D) ? 1 : Region.height;
     UR_CHECK_ERROR(cuMemcpy2DAsync(&CpyDesc, CuStream));
     return UR_RESULT_SUCCESS;
   }
@@ -1124,21 +1138,17 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueMemImageCopy(
     }
 
     ur_mem_type_t ImgType = std::get<SurfaceMem>(hImageSrc->Mem).getImageType();
-    if (ImgType == UR_MEM_TYPE_IMAGE1D) {
-      UR_CHECK_ERROR(cuMemcpyAtoA(DstArray, DstByteOffsetX, SrcArray,
-                                  SrcByteOffsetX, BytesToCopy));
-    } else {
-      ur_rect_region_t AdjustedRegion = {BytesToCopy, region.height,
-                                         region.depth};
-      ur_rect_offset_t SrcOffset = {SrcByteOffsetX, srcOrigin.y, srcOrigin.z};
-      ur_rect_offset_t DstOffset = {DstByteOffsetX, dstOrigin.y, dstOrigin.z};
 
-      Result = commonEnqueueMemImageNDCopy(
-          CuStream, ImgType, AdjustedRegion, &SrcArray, CU_MEMORYTYPE_ARRAY,
-          SrcOffset, &DstArray, CU_MEMORYTYPE_ARRAY, DstOffset);
-      if (Result != UR_RESULT_SUCCESS) {
-        return Result;
-      }
+    ur_rect_region_t AdjustedRegion = {BytesToCopy, region.height,
+                                       region.depth};
+    ur_rect_offset_t SrcOffset = {SrcByteOffsetX, srcOrigin.y, srcOrigin.z};
+    ur_rect_offset_t DstOffset = {DstByteOffsetX, dstOrigin.y, dstOrigin.z};
+
+    Result = commonEnqueueMemImageNDCopy(
+        CuStream, ImgType, AdjustedRegion, &SrcArray, CU_MEMORYTYPE_ARRAY,
+        SrcOffset, &DstArray, CU_MEMORYTYPE_ARRAY, DstOffset);
+    if (Result != UR_RESULT_SUCCESS) {
+      return Result;
     }
 
     if (phEvent) {

@@ -1,5 +1,5 @@
 """
- Copyright (C) 2022-2023 Intel Corporation
+ Copyright (C) 2022-2024 Intel Corporation
 
  Part of the Unified-Runtime Project, under the Apache License v2.0 with LLVM Exceptions.
  See LICENSE.TXT
@@ -36,6 +36,13 @@ class obj_traits:
     def is_handle(obj):
         try:
             return True if re.match(r"handle", obj['type']) else False
+        except:
+            return False
+
+    @staticmethod
+    def is_enum(obj):
+        try:
+            return True if re.match(r"enum", obj['type']) else False
         except:
             return False
 
@@ -224,7 +231,7 @@ class type_traits:
             return True if re.match(cls.RE_ARRAY, name) else False
         except:
             return False
-        
+
     @classmethod
     def get_array_length(cls, name):
         if not cls.is_array(name):
@@ -232,7 +239,7 @@ class type_traits:
 
         match = re.match(cls.RE_ARRAY, name)
         return match.groups()[1]
-    
+
     @classmethod
     def get_array_element_type(cls, name):
         if not cls.is_array(name):
@@ -240,6 +247,14 @@ class type_traits:
 
         match = re.match(cls.RE_ARRAY, name)
         return match.groups()[0]
+
+    @staticmethod
+    def get_struct_members(type_name, meta):
+        struct_type = _remove_const_ptr(type_name)
+        if not struct_type in meta['struct']:
+            raise Exception(
+                f"Cannot return members of non-struct type {struct_type}")
+        return meta['struct'][struct_type]['members']
 
 """
     Extracts traits from a value name
@@ -420,7 +435,7 @@ class param_traits:
             return True if re.match(cls.RE_BOUNDS, item['desc']) else False
         except:
             return False
-    
+
     @classmethod
     def tagged_member(cls, item):
         try:
@@ -446,6 +461,13 @@ class param_traits:
     def is_release(cls, item):
         try:
             return True if re.match(cls.RE_RELEASE, item['desc']) else False
+        except:
+            return False
+
+    @classmethod
+    def is_typename(cls, item):
+        try:
+            return True if re.match(cls.RE_TYPENAME, item['desc']) else False
         except:
             return False
 
@@ -939,6 +961,17 @@ def make_func_name(namespace, tags, obj):
 
 """
 Public:
+    returns the name of a function from a given name with prefix
+"""
+def make_func_name_with_prefix(prefix, name):
+    func_name = re.sub(r'^[^_]+_', '', name)
+    func_name = re.sub('_t$', '', func_name).capitalize()
+    func_name = re.sub(r'_([a-z])', lambda match: match.group(1).upper(), func_name)
+    func_name = f'{prefix}{func_name}'
+    return func_name
+
+"""
+Public:
     returns the etor of a function
 """
 def make_func_etor(namespace, tags, obj):
@@ -1241,24 +1274,157 @@ def get_loader_prologue(namespace, tags, obj, meta):
 
     return prologue
 
+
+"""
+Private:
+    Takes a list of struct members and recursively searches for class handles.
+    Returns a list of class handles with access chains to reach them (e.g.
+    "struct_a->struct_b.handle"). Also handles ranges of class handles and
+    ranges of structs with class handle members, although the latter only works
+    to one level of recursion i.e. a range of structs with a range of structs
+    with a handle member will not work.
+"""
+def get_struct_handle_members(namespace,
+                              tags,
+                              meta,
+                              members,
+                              parent='',
+                              is_struct_range=False):
+    handle_members = []
+    for m in members:
+        if type_traits.is_class_handle(m['type'], meta):
+            m_tname = _remove_const_ptr(subt(namespace, tags, m['type']))
+            m_objname = re.sub(r"(\w+)_handle_t", r"\1_object_t", m_tname)
+            # We can deal with a range of handles, but not if it's in a range of structs
+            if param_traits.is_range(m) and not is_struct_range:
+                handle_members.append({
+                    'parent': parent,
+                    'name': m['name'],
+                    'obj_name': m_objname,
+                    'type': m_tname,
+                    'range_start': param_traits.range_start(m),
+                    'range_end': param_traits.range_end(m)
+                })
+            else:
+                handle_members.append({
+                    'parent': parent,
+                    'name': m['name'],
+                    'obj_name': m_objname,
+                    'optional': param_traits.is_optional(m)
+                })
+        elif type_traits.is_struct(m['type'], meta):
+            member_struct_members = type_traits.get_struct_members(
+                m['type'], meta)
+            if param_traits.is_range(m):
+                # If we've hit a range of structs we need to start a new recursion looking
+                # for handle members. We do not support range within range, so skip that
+                if is_struct_range:
+                    continue
+                range_handle_members = get_struct_handle_members(
+                    namespace, tags, meta, member_struct_members, '', True)
+                if range_handle_members:
+                    handle_members.append({
+                        'parent': parent,
+                        'name': m['name'],
+                        'type': subt(namespace, tags, _remove_const_ptr(m['type'])),
+                        'range_start': param_traits.range_start(m),
+                        'range_end': param_traits.range_end(m),
+                        'handle_members': range_handle_members
+                    })
+            else:
+                # If it's just a struct we can keep recursing in search of handles
+                m_is_pointer = type_traits.is_pointer(m['type'])
+                new_parent_deref = '->' if m_is_pointer else '.'
+                new_parent = m['name'] + new_parent_deref
+                handle_members += get_struct_handle_members(
+                    namespace, tags, meta, member_struct_members, new_parent,
+                    is_struct_range)
+
+    return handle_members
+
+
+"""
+Public:
+    Strips a string of all dereferences.
+
+    This is useful in layer templates for creating unique variable names. For
+    instance if we need to copy pMyStruct->member.hObject out of a function
+    parameter into a local variable we use this to get the unique (or at least
+    distinct from any other parameter we might copy) variable name
+    pMyStructmemberhObject.
+"""
+def strip_deref(string_to_strip):
+    string_to_strip = string_to_strip.replace('.', '')
+    return string_to_strip.replace('->', '')
+
+
+"""
+Public:
+    Takes a function object and recurses through its struct parameters to return
+    a list of structs that have handle object members the loader will need to
+    convert.
+"""
+def get_object_handle_structs_to_convert(namespace, tags, obj, meta):
+    structs = []
+    params = _filter_param_list(obj['params'], ["[in]"])
+
+    for item in params:
+        if type_traits.is_struct(item['type'], meta):
+            members = type_traits.get_struct_members(item['type'], meta)
+            handle_members = get_struct_handle_members(namespace, tags, meta,
+                                                       members)
+            if handle_members:
+                name = subt(namespace, tags, item['name'])
+                tname = _remove_const_ptr(subt(namespace, tags, item['type']))
+                struct = {
+                    'name': name,
+                    'type': tname,
+                    'optional': param_traits.is_optional(item),
+                    'members': handle_members
+                }
+
+                structs.append(struct)
+
+    return structs
+
+
+"""
+Public:
+    returns an enum object with the given name
+"""
+def get_enum_by_name(specs, namespace, tags, name, only_typed):
+    for s in specs:
+        for obj in s['objects']:
+            if obj_traits.is_enum(obj) and make_enum_name(namespace, tags, obj) == name:
+                typed = obj.get('typed_etors', False) is True
+                if only_typed:
+                    if typed:
+                        return obj
+                    else:
+                        return None
+                else:
+                    return obj
+    return None
+
 """
 Public:
     returns a list of dict for converting loader output parameters
 """
-def get_loader_epilogue(namespace, tags, obj, meta):
+def get_loader_epilogue(specs, namespace, tags, obj, meta):
     epilogue = []
 
     for i, item in enumerate(obj['params']):
         if param_traits.is_mbz(item):
             continue
+
+        name = subt(namespace, tags, item['name'])
+        tname = _remove_const_ptr(subt(namespace, tags, item['type']))
+
+        obj_name = re.sub(r"(\w+)_handle_t", r"\1_object_t", tname)
+        fty_name = re.sub(r"(\w+)_handle_t", r"\1_factory", tname)
+
         if param_traits.is_release(item) or param_traits.is_output(item) or param_traits.is_inoutput(item):
             if type_traits.is_class_handle(item['type'], meta):
-                name = subt(namespace, tags, item['name'])
-                tname = _remove_const_ptr(subt(namespace, tags, item['type']))
-
-                obj_name = re.sub(r"(\w+)_handle_t", r"\1_object_t", tname)
-                fty_name = re.sub(r"(\w+)_handle_t", r"\1_factory", tname)
-
                 if param_traits.is_range(item):
                     range_start = param_traits.range_start(item)
                     range_end   = param_traits.range_end(item)
@@ -1279,40 +1445,46 @@ def get_loader_epilogue(namespace, tags, obj, meta):
                         'release': param_traits.is_release(item),
                         'optional': param_traits.is_optional(item)
                     })
+            elif param_traits.is_typename(item):
+                typename = param_traits.typename(item)
+                underlying_type = None
+                for inner in obj['params']:
+                    iname = _get_param_name(namespace, tags, inner)
+                    if iname == typename:
+                        underlying_type = _get_type_name(namespace, tags, obj, inner)
+                if underlying_type is None:
+                    continue
+
+                prop_size = param_traits.typename_size(item)
+                enum = get_enum_by_name(specs, namespace, tags, underlying_type, True)
+                handle_etors = []
+                for etor in enum['etors']:
+                    associated_type = etor_get_associated_type(namespace, tags, etor)
+                    if 'handle' in associated_type:
+                        is_array = False
+                        if value_traits.is_array(associated_type):
+                            associated_type = value_traits.get_array_name(associated_type)
+                            is_array = True
+
+                        etor_name = make_etor_name(namespace, tags, enum['name'], etor['name'])
+                        obj_name = re.sub(r"(\w+)_handle_t", r"\1_object_t", associated_type)
+                        fty_name = re.sub(r"(\w+)_handle_t", r"\1_factory", associated_type)
+                        handle_etors.append({'name': etor_name,
+                                             'type': associated_type,
+                                             'obj': obj_name,
+                                             'factory': fty_name,
+                                             'is_array': is_array})
+
+                if handle_etors:
+                    epilogue.append({
+                                     'name': name,
+                                     'obj': obj_name,
+                                     'release': False,
+                                     'typename': typename,
+                                     'size': prop_size,
+                                     'etors': handle_etors})
 
     return epilogue
-
-"""
-Public:
-    returns a dictionary with lists of create, retain and release functions
-"""
-def get_create_retain_release_functions(specs, namespace, tags):
-    funcs = []
-    for s in specs:
-        for obj in s['objects']:
-            if re.match(r"function", obj['type']):
-                funcs.append(make_func_name(namespace, tags, obj))
-
-    create_suffixes = r"(Create[A-Za-z]*){1}"
-    retain_suffixes = r"(Retain){1}"
-    release_suffixes = r"(Release){1}"
-
-    create_exp = namespace + r"([A-Za-z]+)" + create_suffixes
-    retain_exp = namespace + r"([A-Za-z]+)" + retain_suffixes
-    release_exp = namespace + r"([A-Za-z]+)" + release_suffixes
-
-    create_funcs, retain_funcs, release_funcs = (
-        list(filter(lambda f: re.match(create_exp, f), funcs)),
-        list(filter(lambda f: re.match(retain_exp, f), funcs)),
-        list(filter(lambda f: re.match(release_exp, f), funcs)),
-    )
-
-    create_funcs, retain_funcs = (
-        list(filter(lambda f: re.sub(create_suffixes, "Release", f) in release_funcs, create_funcs)),
-        list(filter(lambda f: re.sub(retain_suffixes, "Release", f) in release_funcs, retain_funcs)),
-    )
-
-    return {"create": create_funcs, "retain": retain_funcs, "release": release_funcs}
 
 
 def get_event_wait_list_functions(specs, namespace, tags):
@@ -1324,3 +1496,69 @@ def get_event_wait_list_functions(specs, namespace, tags):
                         x['name'] == 'numEventsInWaitList' for x in obj['params']):
                     funcs.append(make_func_name(namespace, tags, obj))
     return funcs
+
+
+"""
+Private:
+    returns a dictionary with lists of create, get, retain and release functions
+"""
+def _get_create_get_retain_release_functions(specs, namespace, tags):
+    funcs = []
+    for s in specs:
+        for obj in s['objects']:
+            if re.match(r"function", obj['type']):
+                funcs.append(make_func_name(namespace, tags, obj))
+
+    create_suffixes = r"(Create[A-Za-z]*){1}$"
+    get_suffixes = r"(Get){1}$"
+    retain_suffixes = r"(Retain){1}$"
+    release_suffixes = r"(Release){1}$"
+    common_prefix = r"^" + namespace
+
+    create_exp = common_prefix + r"[A-Za-z]+" + create_suffixes
+    get_exp = common_prefix + r"[A-Za-z]+" + get_suffixes
+    retain_exp = common_prefix + r"[A-Za-z]+" + retain_suffixes
+    release_exp = common_prefix + r"[A-Za-z]+" + release_suffixes
+
+    create_funcs, get_funcs, retain_funcs, release_funcs = (
+        list(filter(lambda f: re.match(create_exp, f), funcs)),
+        list(filter(lambda f: re.match(get_exp, f), funcs)),
+        list(filter(lambda f: re.match(retain_exp, f), funcs)),
+        list(filter(lambda f: re.match(release_exp, f), funcs)),
+    )
+
+    return {"create": create_funcs, "get": get_funcs, "retain": retain_funcs, "release": release_funcs}
+
+
+"""
+Public:
+    returns a list of dictionaries containing handle types and the corresponding create, get, retain and release functions
+"""
+def get_handle_create_get_retain_release_functions(specs, namespace, tags):
+    # Handles without release function
+    excluded_handles = ["$x_platform_handle_t", "$x_native_handle_t"]
+    # Handles from experimental features
+    exp_prefix = "$x_exp"
+
+    funcs = _get_create_get_retain_release_functions(specs, namespace, tags)
+    records = []
+    for h in get_adapter_handles(specs):
+        if h['name'] in excluded_handles or h['name'].startswith(exp_prefix):
+            continue
+
+        class_type = subt(namespace, tags, h['class'])
+        create_funcs = list(filter(lambda f: class_type in f, funcs['create']))
+        get_funcs = list(filter(lambda f: class_type in f, funcs['get']))
+        retain_funcs = list(filter(lambda f: class_type in f, funcs['retain']))
+        release_funcs = list(filter(lambda f: class_type in f, funcs['release']))
+
+        record = {}
+        record['handle'] = subt(namespace, tags, h['name'])
+        record['create'] = create_funcs
+        record['get'] = get_funcs
+        record['retain'] = retain_funcs
+        record['release'] = release_funcs
+
+        records.append(record)
+
+    return records

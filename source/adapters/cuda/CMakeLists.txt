@@ -76,10 +76,13 @@ else()
   message(WARNING "CUDA adapter USM pools are disabled, set UMF_ENABLE_POOL_TRACKING to enable them")
 endif()
 
+if (CUDA_cupti_LIBRARY)
+  target_compile_definitions("ur_adapter_cuda" PRIVATE CUPTI_LIB_PATH="${CUDA_cupti_LIBRARY}")
+endif()
+
 target_link_libraries(${TARGET_NAME} PRIVATE
     ${PROJECT_NAME}::headers
     ${PROJECT_NAME}::common
-    ${PROJECT_NAME}::unified_malloc_framework
     Threads::Threads
     cudadrv
 )

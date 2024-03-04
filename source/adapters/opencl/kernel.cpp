@@ -10,6 +10,7 @@
 #include "common.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <memory>
 
 UR_APIEXPORT ur_result_t UR_APICALL
@@ -320,7 +321,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urKernelSetExecInfo(
   switch (propName) {
   case UR_KERNEL_EXEC_INFO_USM_INDIRECT_ACCESS: {
     if (*(static_cast<const ur_bool_t *>(pPropValue)) == true) {
-      CL_RETURN_ON_FAILURE(usmSetIndirectAccess(hKernel));
+      UR_RETURN_ON_FAILURE(usmSetIndirectAccess(hKernel));
     }
     return UR_RESULT_SUCCESS;
   }
@@ -376,6 +377,16 @@ UR_APIEXPORT ur_result_t UR_APICALL urKernelGetNativeHandle(
   return UR_RESULT_SUCCESS;
 }
 
+UR_APIEXPORT ur_result_t UR_APICALL urKernelSuggestMaxCooperativeGroupCountExp(
+    ur_kernel_handle_t hKernel, size_t localWorkSize,
+    size_t dynamicSharedMemorySize, uint32_t *pGroupCountRet) {
+  (void)hKernel;
+  (void)localWorkSize;
+  (void)dynamicSharedMemorySize;
+  *pGroupCountRet = 1;
+  return UR_RESULT_SUCCESS;
+}
+
 UR_APIEXPORT ur_result_t UR_APICALL urKernelCreateWithNativeHandle(
     ur_native_handle_t hNativeKernel, ur_context_handle_t, ur_program_handle_t,
     const ur_kernel_native_properties_t *pProperties,
@@ -406,31 +417,5 @@ UR_APIEXPORT ur_result_t UR_APICALL urKernelSetArgSampler(
       cl_adapter::cast<cl_kernel>(hKernel), cl_adapter::cast<cl_uint>(argIndex),
       sizeof(hArgValue), cl_adapter::cast<const cl_sampler *>(&hArgValue));
   CL_RETURN_ON_FAILURE(RetErr);
-  return UR_RESULT_SUCCESS;
-}
-
-UR_APIEXPORT ur_result_t UR_APICALL urGetKernelSuggestedLocalWorkSize(
-    ur_queue_handle_t hQueue, ur_kernel_handle_t hKernel, uint32_t workDim,
-    const size_t *pGlobalWorkOffset, const size_t *pGlobalWorkSize,
-    size_t *pSuggestedLocalWorkSize) {
-  std::ignore = hQueue;
-  std::ignore = hKernel;
-  std::ignore = workDim;
-  std::ignore = pGlobalWorkOffset;
-  std::ignore = pGlobalWorkSize;
-
-  pSuggestedLocalWorkSize[0] = 1;
-  if (workDim >= 2)
-    pSuggestedLocalWorkSize[1] = 1;
-  if (workDim >= 3)
-    pSuggestedLocalWorkSize[2] = 1;
-
-  // FIXME: clGetKernelSuggestedLocalWorkSizeKHR is unimplemented now.
-  // cl_int RetErr = clGetKernelSuggestedLocalWorkSizeKHR(
-  //     cl_adapter::cast<cl_command_queue>(hQueue),
-  //     cl_adapter::cast<cl_kernel>(hKernel), workDim, pGlobalWorkOffset,
-  //     pGlobalWorkSize, pSuggestedLocalWorkSize);
-  // CL_RETURN_ON_FAILURE(RetErr);
-
   return UR_RESULT_SUCCESS;
 }

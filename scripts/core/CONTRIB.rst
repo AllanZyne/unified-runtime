@@ -75,22 +75,42 @@ Adapter Change Process
     accompanied by a corresponding update in the *intel/llvm* pull request as
     indicated in step 2, so the testing is always up-to-date.
 
-6.  The Unified Runtime maintainers *must* ensure that step 5 has been carried
-    out and that all pre-merge testing has passed before accepting the
+6.  Once the *oneapi-src/unified-runtime* pull request has been approved by at
+    least one member of each relevant code-owner team:
+
+    *   Make the *intel/llvm* pull request ready to review (remove draft) in
+        order to gain approvals from all code-owners to ensure step 8 can
+        progress quickly when the time comes.
+
+    *   Add the *ready to merge* label to the *oneapi-src/unified-runtime* pull
+        request.
+
+7.  The Unified Runtime maintainers *must* ensure that step 5 has been carried
+    out and that all pre-merge testing has passed before merging the
     *oneapi-src/unified-runtime* pull request.
 
-7.  Once the *oneapi-src/unified-runtime* pull request is accepted:
+    *   The oldest pull requests with the *ready to merge* label will be
+        prioritized.
+
+    *   Contact the Unified Runtime maintainers if a pull request should be
+        given a higher priority.
+
+8.  Once the *oneapi-src/unified-runtime* pull request has been merged:
 
     *   Reverse the change to `UNIFIED_RUNTIME_REPO`_ made in step 2.
+
     *   Update the `UNIFIED_RUNTIME_TAG`_ to point at the
         *oneapi-src/unified-runtime* commit/tag containing the merged adapter
         changes.
+
     *   Update the pull request description, linking to any other *intel/llvm*
         pull requests who's changes have been merged into
         *oneapi-src/unified-runtime* but have not yet been merge into
         *intel/llvm*.
-    *   Mark the *intel/llvm* pull request as ready for review and follow their
-        review process.
+
+    *   A Unified Runtime maintainer may facilitate these steps either by
+        making suggestions on the *intel/llvm* pull request or by making those
+        changes directly.
 
 .. _oneapi-src/unified-runtime:
    https://github.com/oneapi-src/unified-runtime
@@ -147,7 +167,7 @@ available.
 
 .. code-block:: console
 
-    $ cmake build/ -DUR_FORMAT_CPP_STYLE=ON
+    $ cmake -B build/ -DUR_FORMAT_CPP_STYLE=ON
 
 You can then follow the instructions below to use the ``generate`` target to
 regenerate the source.
@@ -187,7 +207,7 @@ equivalent):
 Writing YAML
 ============
 
-Please read the :ref:`core/INTRO:Naming Convention` section prior to making a
+Please read the :ref:`core/CONTRIB:Naming Convention` section prior to making a
 contribution and refer to the `YAML syntax`_ for specifics of how to define the
 required constructs.
 
@@ -204,6 +224,29 @@ arguments:
 *   Handle arguments are prefixed with ``h`` i.e. ``hQueue``.
 *   Pointer to handle arguments, such as out parameters, are prefixed with
     ``ph`` i.e. ``phQueue``.
+
+Limitations
+-----------
+
+There are some limitations on the patterns our spec generator can handle. These
+limitations are due to convenience of implementation rather than design: if
+they are preventing you from implementing a feature please open an issue and we
+will be happy to try and accommodate your use case. Otherwise beware of the
+following:
+
+* A function parameter or struct member which is a struct type that has any of
+  the following members in its type definition must not have the ``[range]``
+  tag:
+
+  * An object handle with the ``[range]`` tag
+
+  * A struct type with the ``[range]`` tag that has an object handle member
+
+* A struct member which is a pointer to a struct type must not have the
+  ``[optional]`` tag if that struct (or any of its members, recursively) has
+  an object handle member in its definition.
+
+* A struct member which is an object handle must not have the ``[out]`` tag.
 
 Forks and Pull Requests
 =======================
@@ -228,6 +271,16 @@ Actions workflow and *must* be reviewed by no less than two code owners.
     Source`_. This will automatically resolve conflicts in the generated source
     files, leaving only conflicts in non-generated source files to be resolved,
     if any.
+
+By default, any new fork has all GitHub Actions workflows disabled. If you would
+like to, e.g., test your branch using our CI workflows *before* creating
+a pull request, you have to enter the *Actions* tab on your fork and enable
+workflows for this repository. When they are not needed anymore, you can disable
+them again, but it has to be done one by one. The CI on the upstream repository
+gets busy from time to time. That's why you may want to enable workflows on your
+fork to get the testing results quicker. The disadvantage of the CI on your fork
+is that it may report some failing jobs you may not expect, and it does not run
+some of the jobs (due to a lack of specific hardware from self-hosted runners).
 
 Core Features
 =============
@@ -343,7 +396,7 @@ values.
 
 
 Naming Convention
------------------
+=================
 
 The following naming conventions must be followed:
 
