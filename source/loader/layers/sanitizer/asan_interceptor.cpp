@@ -53,33 +53,6 @@ uptr MemToShadow_PVC(uptr USM_SHADOW_BASE, uptr UPtr) {
     }
 }
 
-ur_context_handle_t getContext(ur_queue_handle_t Queue) {
-    ur_context_handle_t Context;
-    [[maybe_unused]] auto Result = context.urDdiTable.Queue.pfnGetInfo(
-        Queue, UR_QUEUE_INFO_CONTEXT, sizeof(ur_context_handle_t), &Context,
-        nullptr);
-    assert(Result == UR_RESULT_SUCCESS);
-    return Context;
-}
-
-ur_device_handle_t getDevice(ur_queue_handle_t Queue) {
-    ur_device_handle_t Device;
-    [[maybe_unused]] auto Result = context.urDdiTable.Queue.pfnGetInfo(
-        Queue, UR_QUEUE_INFO_DEVICE, sizeof(ur_device_handle_t), &Device,
-        nullptr);
-    assert(Result == UR_RESULT_SUCCESS);
-    return Device;
-}
-
-ur_program_handle_t getProgram(ur_kernel_handle_t Kernel) {
-    ur_program_handle_t Program;
-    [[maybe_unused]] auto Result = context.urDdiTable.Kernel.pfnGetInfo(
-        Kernel, UR_KERNEL_INFO_PROGRAM, sizeof(ur_program_handle_t), &Program,
-        nullptr);
-    assert(Result == UR_RESULT_SUCCESS);
-    return Program;
-}
-
 void getProgramDevices(ur_program_handle_t Program,
                        std::vector<ur_device_handle_t> &Devices) {
     size_t PropSize;
@@ -249,8 +222,7 @@ ur_result_t enqueueMemSetShadow(ur_queue_handle_t Queue, uptr Ptr, uptr Size,
 ///  - 1 <= k <= 7: Only the first k bytes is accessible
 ///
 /// ref: https://github.com/google/sanitizers/wiki/AddressSanitizerAlgorithm#mapping
-ur_result_t enqueueAllocInfo(ur_context_handle_t Context,
-                             ur_device_handle_t Device, ur_queue_handle_t Queue,
+ur_result_t enqueueAllocInfo(ur_queue_handle_t Queue,
                              std::shared_ptr<AllocInfo> &AllocInfo,
                              ur_event_handle_t &LastEvent) {
     // Init zero
@@ -310,15 +282,6 @@ ur_result_t enqueueAllocInfo(ur_context_handle_t Context,
 }
 
 } // namespace
-
-AllocInfo MemBuffer::getAllocInfo([[maybe_unused]] ur_device_handle_t Device) {
-    ur_native_handle_t Handle;
-    // FIXME: need to get specific native handle of buffer
-    context.urDdiTable.Mem.pfnGetNativeHandle(Buffer, &Handle);
-    uptr Allocated = reinterpret_cast<uptr>(Handle);
-    return AllocInfo{Allocated, Allocated, Allocated + Size - 1, SizeWithRZ,
-                     AllocType::MEM_BUFFER};
-}
 
 SanitizerInterceptor::SanitizerInterceptor()
     : m_IsInASanContext(IsInASanContext()),
@@ -589,18 +552,9 @@ ur_result_t SanitizerInterceptor::updateShadowMemory(ur_kernel_handle_t Kernel,
     ur_event_handle_t LastEvent = QueueInfo->LastEvent;
 
     for (auto &AI : DeviceInfo->AllocInfos) {
-        UR_CALL(enqueueAllocInfo(Queue, AI.get(), LastEvent));
+        UR_CALL(enqueueAllocInfo(Queue, AI, LastEvent));
     }
     DeviceInfo->AllocInfos.clear();
-
-    for (auto &Pair : KernelInfo->ArgumentsMap) {
-        // context.logger.debug("KernelInfo.ArgumentsMap({}, {})", Pair.first,
-        //                      Pair.second.use_count());
-        if (auto MemBuffer = Pair.second.lock()) {
-            auto AI = MemBuffer->getAllocInfo(Device);
-            UR_CALL(enqueueAllocInfo(Queue, &AI, LastEvent));
-        }
-    }
 
     QueueInfo->LastEvent = LastEvent;
 

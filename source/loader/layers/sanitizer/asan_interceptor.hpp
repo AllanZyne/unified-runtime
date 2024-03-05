@@ -180,13 +180,14 @@ class SanitizerInterceptor {
             reinterpret_cast<ur_mem_handle_t>(MemBuffer.get()), MemBuffer);
     }
 
+    std::shared_ptr<ContextInfo> getContextInfo(ur_context_handle_t Context) {
+        std::shared_lock<ur_shared_mutex> Guard(m_ContextMapMutex);
+        assert(m_ContextMap.find(Context) != m_ContextMap.end());
+        return m_ContextMap[Context];
+    }
+
   private:
     ur_result_t updateShadowMemory(ur_queue_handle_t Queue);
-    ur_result_t enqueueAllocInfo(ur_context_handle_t Context,
-                                 ur_device_handle_t Device,
-                                 ur_queue_handle_t Queue,
-                                 std::shared_ptr<AllocInfo> &AI,
-                                 ur_event_handle_t &LastEvent);
 
     void eraseMemBuffer(ur_mem_handle_t MemHandle) {
         std::scoped_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
@@ -208,12 +209,6 @@ class SanitizerInterceptor {
             return m_MemBufferMap.at(MemHandle).get()->Buffer;
         }
         return MemHandle;
-    }
-
-    std::shared_ptr<ContextInfo> getContextInfo(ur_context_handle_t Context) {
-        std::shared_lock<ur_shared_mutex> Guard(m_ContextMapMutex);
-        assert(m_ContextMap.find(Context) != m_ContextMap.end());
-        return m_ContextMap[Context];
     }
 
   private:
