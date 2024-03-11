@@ -55,22 +55,13 @@ uptr MemToShadow_PVC(uptr USM_SHADOW_BASE, uptr UPtr) {
     }
 }
 
-ur_context_handle_t getContext(ur_queue_handle_t Queue) {
+ur_context_handle_t getContext(ur_program_handle_t Program) {
     ur_context_handle_t Context;
-    [[maybe_unused]] auto Result = context.urDdiTable.Queue.pfnGetInfo(
-        Queue, UR_QUEUE_INFO_CONTEXT, sizeof(ur_context_handle_t), &Context,
+    [[maybe_unused]] auto Result = context.urDdiTable.Program.pfnGetInfo(
+        Program, UR_PROGRAM_INFO_CONTEXT, sizeof(ur_context_handle_t), &Context,
         nullptr);
     assert(Result == UR_RESULT_SUCCESS);
     return Context;
-}
-
-ur_device_handle_t getDevice(ur_queue_handle_t Queue) {
-    ur_device_handle_t Device;
-    [[maybe_unused]] auto Result = context.urDdiTable.Queue.pfnGetInfo(
-        Queue, UR_QUEUE_INFO_DEVICE, sizeof(ur_device_handle_t), &Device,
-        nullptr);
-    assert(Result == UR_RESULT_SUCCESS);
-    return Device;
 }
 
 ur_program_handle_t getProgram(ur_kernel_handle_t Kernel) {
@@ -121,6 +112,60 @@ std::string getKernelName(ur_kernel_handle_t Kernel) {
 
 } // namespace
 
+ur_result_t MemBuffer::getHandle(ur_device_handle_t Device, char *&Handle) {
+    // Sub-buffers don't maintain own allocations but rely on parent buffer.
+    if (SubBuffer) {
+        UR_CALL(SubBuffer->Parent->getHandle(Device, Handle));
+        Handle += SubBuffer->Origin;
+        return UR_RESULT_SUCCESS;
+    }
+
+    auto &Allocation = Allocations[Device];
+    if (!Allocation) {
+        ur_usm_desc_t USMDesc{};
+        USMDesc.align = getAlignment();
+        ur_usm_pool_handle_t Pool{};
+        UR_CALL(context.interceptor->allocateMemory(
+            Context, Device, &USMDesc, Pool, Size, (void **)&Allocation,
+            AllocType::MEM_BUFFER));
+
+        if (HostPtr) {
+            ur_queue_handle_t Queue;
+            UR_CALL(context.urDdiTable.Queue.pfnCreate(Context, Device, nullptr,
+                                                       &Queue));
+            UR_CALL(context.urDdiTable.Enqueue.pfnUSMMemcpy(
+                Queue, true, Allocation, HostPtr, Size, 0, nullptr, nullptr));
+        }
+        Handle = Allocation;
+    } else {
+        Handle = Allocation;
+    }
+
+    return UR_RESULT_SUCCESS;
+}
+
+ur_result_t MemBuffer::free() {
+    for (auto &Pair : Allocations) {
+        void *Ptr = Pair.second;
+        context.logger.debug("MemBuffer::free(Trying to release pointer {})",
+                             Ptr);
+        UR_CALL(context.interceptor->releaseMemory(Context, Ptr));
+    }
+    Allocations.clear();
+    return UR_RESULT_SUCCESS;
+}
+
+size_t MemBuffer::getAlignment() {
+    // Choose an alignment that is at most 64 and is the next power of 2
+    // for sizes less than 64.
+    size_t MsbIdx = 63 - __builtin_clz(Size);
+    size_t Alignment = (1 << (MsbIdx + 1));
+    if (Alignment > 64) {
+        Alignment = 64;
+    }
+    return Alignment;
+}
+
 SanitizerInterceptor::SanitizerInterceptor()
     : m_IsInASanContext(IsInASanContext()),
       m_ShadowMemInited(m_IsInASanContext) {}
@@ -155,12 +200,20 @@ ur_result_t SanitizerInterceptor::allocateMemory(
         Alignment =
             DeviceInfo ? DeviceInfo->Alignment : ASAN_SHADOW_GRANULARITY;
     }
+    uptr MinAlignment = std::min(ASAN_SHADOW_GRANULARITY, Alignment);
 
     // Copy from LLVM compiler-rt/lib/asan
     uptr RZLog = ComputeRZLog(Size);
     uptr RZSize = RZLog2Size(RZLog);
     uptr RoundedSize = RoundUpTo(Size, Alignment);
     uptr NeededSize = RoundedSize + RZSize * 2;
+    if (Alignment > MinAlignment) {
+        NeededSize += Alignment;
+    }
+
+    context.logger.debug(
+        "RZlog {}, RZSize {}, RoundedSize {}, Needed Size {}, Alignment {}",
+        RZLog, RZSize, RoundedSize, NeededSize, Alignment);
 
     void *Allocated = nullptr;
 
@@ -172,6 +225,9 @@ ur_result_t SanitizerInterceptor::allocateMemory(
                                                     NeededSize, &Allocated));
     } else if (Type == AllocType::SHARED_USM) {
         UR_CALL(context.urDdiTable.USM.pfnSharedAlloc(
+            Context, Device, Properties, Pool, NeededSize, &Allocated));
+    } else if (Type == AllocType::MEM_BUFFER) {
+        UR_CALL(context.urDdiTable.USM.pfnDeviceAlloc(
             Context, Device, Properties, Pool, NeededSize, &Allocated));
     } else {
         context.logger.error("Unsupport memory type");
@@ -212,9 +268,9 @@ ur_result_t SanitizerInterceptor::allocateMemory(
     }
 
     context.logger.info(
-        "AllocInfos(AllocBegin={},  User={}-{}, NeededSize={}, Type={})",
-        (void *)AllocBegin, (void *)UserBegin, (void *)UserEnd, NeededSize,
-        ToString(Type));
+        "AllocInfos(Alloc={}-{},  User={}-{}, NeededSize={}, Type={})",
+        (void *)AllocBegin, (void *)(AllocBegin + NeededSize),
+        (void *)UserBegin, (void *)UserEnd, NeededSize, ToString(Type));
 
     return UR_RESULT_SUCCESS;
 }
@@ -705,6 +761,45 @@ ur_result_t SanitizerInterceptor::eraseQueue(ur_context_handle_t Context,
     return UR_RESULT_SUCCESS;
 }
 
+ur_result_t
+SanitizerInterceptor::insertMemBuffer(std::shared_ptr<MemBuffer> MemBuffer) {
+    std::scoped_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
+    m_MemBufferMap.emplace(reinterpret_cast<ur_mem_handle_t>(MemBuffer.get()),
+                           MemBuffer);
+    return UR_RESULT_SUCCESS;
+}
+
+ur_result_t SanitizerInterceptor::eraseMemBuffer(ur_mem_handle_t MemHandle) {
+    std::scoped_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
+    assert(m_MemBufferMap.find(MemHandle) != m_MemBufferMap.end());
+    m_MemBufferMap.erase(MemHandle);
+    return UR_RESULT_SUCCESS;
+}
+
+std::shared_ptr<MemBuffer>
+SanitizerInterceptor::getMemBuffer(ur_mem_handle_t MemHandle) {
+    std::shared_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
+    if (m_MemBufferMap.find(MemHandle) != m_MemBufferMap.end()) {
+        return m_MemBufferMap[MemHandle];
+    }
+    return nullptr;
+}
+
+std::shared_ptr<KernelInfo>
+SanitizerInterceptor::getKernelInfo(ur_kernel_handle_t Kernel) {
+    ur_program_handle_t Program = getProgram(Kernel);
+    std::shared_ptr<ContextInfo> ContextInfo = getContextInfo(Program);
+    return ContextInfo->getKernelInfo(Kernel);
+}
+
+std::shared_ptr<ContextInfo>
+SanitizerInterceptor::getContextInfo(ur_program_handle_t Program) {
+    ur_context_handle_t Context = getContext(Program);
+    std::shared_lock<ur_shared_mutex> Guard(m_ContextMapMutex);
+    assert(m_ContextMap.find(Context) != m_ContextMap.end());
+    return m_ContextMap[Context];
+}
+
 ur_result_t SanitizerInterceptor::prepareLaunch(ur_queue_handle_t Queue,
                                                 ur_kernel_handle_t Kernel,
                                                 LaunchInfo &LaunchInfo,
@@ -718,11 +813,25 @@ ur_result_t SanitizerInterceptor::prepareLaunch(ur_queue_handle_t Queue,
     auto ContextInfo = getContextInfo(Context);
     auto DeviceInfo = ContextInfo->getDeviceInfo(Device);
     auto QueueInfo = ContextInfo->getQueueInfo(Queue);
+    auto KernelInfo = ContextInfo->getKernelInfo(Kernel);
 
-    std::scoped_lock<ur_mutex> Guard(QueueInfo->Mutex);
+    std::scoped_lock<ur_mutex, ur_shared_mutex> Guard(QueueInfo->Mutex,
+                                                      KernelInfo->Mutex);
     ur_event_handle_t LastEvent = QueueInfo->LastEvent;
 
     do {
+        // set kernel args
+        for (auto &Pair : KernelInfo->ArgumentsMap) {
+            char *ArgPointer = nullptr;
+            UR_CALL(Pair.second->getHandle(Device, ArgPointer));
+            UR_CALL(context.urDdiTable.Kernel.pfnSetArgPointer(
+                Kernel, Pair.first, nullptr, &ArgPointer));
+
+            context.logger.debug(
+                "Set Kernel {} argument, index {}, arg pointer {}", Kernel,
+                Pair.first, (void *)ArgPointer);
+        }
+
         // Set global variable to program
         auto EnqueueWriteGlobal = [&](const char *Name, const void *Value) {
             ur_event_handle_t NewEvent{};
