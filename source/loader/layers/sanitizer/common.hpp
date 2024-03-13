@@ -31,18 +31,6 @@ using u32 = unsigned int;
 constexpr unsigned ASAN_SHADOW_SCALE = 3;
 constexpr unsigned ASAN_SHADOW_GRANULARITY = 1ULL << ASAN_SHADOW_SCALE;
 
-// Based on "compiler-rt/lib/asan/asan_mapping.h"
-// Typical shadow mapping on Linux/x86_64 with SHADOW_OFFSET == 0x00007fff8000:
-constexpr uptr LOW_SHADOW_BEGIN = 0x00007fff8000ULL;
-constexpr uptr LOW_SHADOW_END = 0x00008fff6fffULL;
-constexpr uptr SHADOW_GAP_BEGIN = 0x00008fff7000ULL;
-constexpr uptr SHADOW_GAP_END = 0x02008fff6fffULL;
-constexpr uptr HIGH_SHADOW_BEGIN = 0x02008fff7000ULL;
-constexpr uptr HIGH_SHADOW_END = 0x10007fff7fffULL;
-constexpr uptr LOW_SHADOW_SIZE = LOW_SHADOW_END - LOW_SHADOW_BEGIN;
-constexpr uptr SHADOW_GAP_SIZE = SHADOW_GAP_END - SHADOW_GAP_BEGIN;
-constexpr uptr HIGH_SHADOW_SIZE = HIGH_SHADOW_END - HIGH_SHADOW_BEGIN;
-
 inline constexpr bool IsPowerOfTwo(uptr x) {
     return (x & (x - 1)) == 0 && x != 0;
 }
@@ -94,20 +82,31 @@ inline constexpr uptr ComputeRZLog(uptr user_requested_size) {
             return Result;                                                     \
     }
 
-#ifndef NDEBUG
-#define UR_ASSERT_EQ(Call, Result) assert(Call == Result)
-#else
-#define UR_ASSERT_EQ(Call, Result) (void)Call
-#endif
+struct BacktraceInfo {
+    uptr offset;
+    std::string module;
+    std::string debug;
+};
+
+struct SourceInfo {
+    std::string file;
+    std::string function;
+    int line;
+    int column;
+};
+
+enum class DeviceType : uint64_t { UNKNOWN = 0, CPU, GPU_PVC, GPU_DG2 };
 
 bool IsInASanContext();
 
-bool SetupShadowMem();
-
-bool DestroyShadowMem();
+bool MmapFixedNoReserve(uptr Addr, uptr Size);
+bool MmapFixedNoAccess(uptr Addr, uptr Size);
+bool Munmap(uptr Addr, uptr Size);
 
 void *GetMemFunctionPointer(const char *);
 
 std::string DemangleName(const std::string &name);
+
+std::string RunCommand(const char *cmd);
 
 } // namespace ur_sanitizer_layer

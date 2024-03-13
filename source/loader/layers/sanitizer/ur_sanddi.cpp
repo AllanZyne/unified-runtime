@@ -11,9 +11,32 @@
  */
 
 #include "asan_interceptor.hpp"
+#include "symbolizer_llvm.hpp"
 #include "ur_sanitizer_layer.hpp"
+#include "ur_sanitizer_utils.hpp"
 
 namespace ur_sanitizer_layer {
+
+namespace {
+
+ur_result_t setupContext(ur_context_handle_t Context, uint32_t numDevices,
+                         const ur_device_handle_t *phDevices) {
+    std::shared_ptr<ContextInfo> CI;
+    UR_CALL(context.interceptor->insertContext(Context, CI));
+    for (uint32_t i = 0; i < numDevices; ++i) {
+        auto hDevice = phDevices[i];
+        std::shared_ptr<DeviceInfo> DI;
+        UR_CALL(context.interceptor->insertDevice(hDevice, DI));
+        if (!DI->ShadowOffset) {
+            UR_CALL(DI->allocShadowMemory(Context));
+        }
+        CI->DeviceList.emplace_back(hDevice);
+        CI->AllocInfosMap[hDevice];
+    }
+    return UR_RESULT_SUCCESS;
+}
+
+} // namespace
 
 ///////////////////////////////////////////////////////////////////////////////
 /// @brief Intercept function for urUSMHostAlloc
@@ -107,56 +130,6 @@ __urdlllocal ur_result_t UR_APICALL urUSMFree(
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-/// @brief Intercept function for urQueueCreate
-__urdlllocal ur_result_t UR_APICALL urQueueCreate(
-    ur_context_handle_t hContext, ///< [in] handle of the context object
-    ur_device_handle_t hDevice,   ///< [in] handle of the device object
-    const ur_queue_properties_t
-        *pProperties, ///< [in][optional] pointer to queue creation properties.
-    ur_queue_handle_t
-        *phQueue ///< [out] pointer to handle of queue object created
-) {
-    auto pfnCreate = context.urDdiTable.Queue.pfnCreate;
-
-    if (nullptr == pfnCreate) {
-        return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
-    }
-
-    context.logger.debug("==== urQueueCreate");
-
-    ur_result_t result = pfnCreate(hContext, hDevice, pProperties, phQueue);
-    if (result == UR_RESULT_SUCCESS) {
-        result = context.interceptor->insertQueue(hContext, *phQueue);
-    }
-
-    return result;
-}
-
-///////////////////////////////////////////////////////////////////////////////
-/// @brief Intercept function for urQueueRelease
-__urdlllocal ur_result_t UR_APICALL urQueueRelease(
-    ur_queue_handle_t hQueue ///< [in] handle of the queue object to release
-) {
-    auto pfnRelease = context.urDdiTable.Queue.pfnRelease;
-
-    if (nullptr == pfnRelease) {
-        return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
-    }
-
-    context.logger.debug("==== urQueueRelease");
-
-    ur_context_handle_t hContext;
-    UR_CALL(context.urDdiTable.Queue.pfnGetInfo(hQueue, UR_QUEUE_INFO_CONTEXT,
-                                                sizeof(ur_context_handle_t),
-                                                &hContext, nullptr));
-    UR_CALL(context.interceptor->eraseQueue(hContext, hQueue));
-
-    ur_result_t result = pfnRelease(hQueue);
-
-    return result;
-}
-
-///////////////////////////////////////////////////////////////////////////////
 /// @brief Intercept function for urProgramBuild
 __urdlllocal ur_result_t UR_APICALL urProgramBuild(
     ur_context_handle_t hContext, ///< [in] handle of the context object
@@ -174,6 +147,31 @@ __urdlllocal ur_result_t UR_APICALL urProgramBuild(
     UR_CALL(pfnProgramBuild(hContext, hProgram, pOptions));
 
     UR_CALL(context.interceptor->registerDeviceGlobals(hContext, hProgram));
+
+    return UR_RESULT_SUCCESS;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Intercept function for urProgramBuildExp
+__urdlllocal ur_result_t UR_APICALL urProgramBuildExp(
+    ur_program_handle_t hProgram, ///< [in] Handle of the program to build.
+    uint32_t numDevices,          ///< [in] number of devices
+    ur_device_handle_t *
+        phDevices, ///< [in][range(0, numDevices)] pointer to array of device handles
+    const char *
+        pOptions ///< [in][optional] pointer to build options null-terminated string.
+) {
+    auto pfnBuildExp = context.urDdiTable.ProgramExp.pfnBuildExp;
+
+    if (nullptr == pfnBuildExp) {
+        return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
+    }
+
+    context.logger.debug("==== urProgramBuildExp");
+
+    UR_CALL(pfnBuildExp(hProgram, numDevices, phDevices, pOptions));
+    UR_CALL(context.interceptor->registerDeviceGlobals(GetContext(hProgram),
+                                                       hProgram));
 
     return UR_RESULT_SUCCESS;
 }
@@ -217,7 +215,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueKernelLaunch(
 
     context.logger.debug("==== urEnqueueKernelLaunch");
 
-    LaunchInfo LaunchInfo;
+    LaunchInfo LaunchInfo(GetContext(hQueue));
     const size_t *pUserLocalWorkSize = pLocalWorkSize;
     if (!pUserLocalWorkSize) {
         pUserLocalWorkSize = LaunchInfo.LocalWorkSize;
@@ -233,23 +231,13 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueKernelLaunch(
                    pUserLocalWorkSize[dim];
     }
 
-    std::vector<ur_event_handle_t> hEvents;
-    for (uint32_t i = 0; i < numEventsInWaitList; ++i) {
-        hEvents.push_back(phEventWaitList[i]);
-    }
-
-    // preLaunchKernel must append to num_events_in_wait_list, not prepend
-    ur_event_handle_t hPreEvent{};
-    UR_CALL(context.interceptor->preLaunchKernel(hKernel, hQueue, hPreEvent,
-                                                 LaunchInfo, numWork));
-    if (hPreEvent) {
-        hEvents.push_back(hPreEvent);
-    }
+    UR_CALL(context.interceptor->preLaunchKernel(hKernel, hQueue, LaunchInfo,
+                                                 numWork));
 
     ur_event_handle_t hEvent{};
     ur_result_t result = pfnKernelLaunch(
         hQueue, hKernel, workDim, pGlobalWorkOffset, pGlobalWorkSize,
-        pLocalWorkSize, hEvents.size(), hEvents.data(), &hEvent);
+        pLocalWorkSize, numEventsInWaitList, phEventWaitList, &hEvent);
 
     if (result == UR_RESULT_SUCCESS) {
         context.interceptor->postLaunchKernel(hKernel, hQueue, hEvent,
@@ -286,17 +274,7 @@ __urdlllocal ur_result_t UR_APICALL urContextCreate(
         pfnCreate(numDevices, phDevices, pProperties, phContext);
 
     if (result == UR_RESULT_SUCCESS) {
-        auto Context = *phContext;
-        result = context.interceptor->insertContext(Context);
-        if (result != UR_RESULT_SUCCESS) {
-            return result;
-        }
-        for (uint32_t i = 0; i < numDevices; ++i) {
-            result = context.interceptor->insertDevice(Context, phDevices[i]);
-            if (result != UR_RESULT_SUCCESS) {
-                return result;
-            }
-        }
+        UR_CALL(setupContext(*phContext, numDevices, phDevices));
     }
 
     return result;
@@ -328,17 +306,7 @@ __urdlllocal ur_result_t UR_APICALL urContextCreateWithNativeHandle(
         hNativeContext, numDevices, phDevices, pProperties, phContext);
 
     if (result == UR_RESULT_SUCCESS) {
-        auto Context = *phContext;
-        result = context.interceptor->insertContext(Context);
-        if (result != UR_RESULT_SUCCESS) {
-            return result;
-        }
-        for (uint32_t i = 0; i < numDevices; ++i) {
-            result = context.interceptor->insertDevice(Context, phDevices[i]);
-            if (result != UR_RESULT_SUCCESS) {
-                return result;
-            }
-        }
+        UR_CALL(setupContext(*phContext, numDevices, phDevices));
     }
 
     return result;
@@ -607,7 +575,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferRead(
     context.logger.debug("==== urEnqueueMemBufferRead");
 
     if (auto MemBuffer = context.interceptor->getMemBuffer(hBuffer)) {
-        ur_device_handle_t Device = getDevice(hQueue);
+        ur_device_handle_t Device = GetDevice(hQueue);
         char *pSrc = nullptr;
         UR_CALL(MemBuffer->getHandle(Device, pSrc));
 
@@ -658,7 +626,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferWrite(
     context.logger.debug("==== urEnqueueMemBufferWrite");
 
     if (auto MemBuffer = context.interceptor->getMemBuffer(hBuffer)) {
-        ur_device_handle_t Device = getDevice(hQueue);
+        ur_device_handle_t Device = GetDevice(hQueue);
         char *pDst = nullptr;
         UR_CALL(MemBuffer->getHandle(Device, pDst));
 
@@ -725,7 +693,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferReadRect(
 
     if (auto MemBuffer = context.interceptor->getMemBuffer(hBuffer)) {
         char *SrcHandle = nullptr;
-        ur_device_handle_t Device = getDevice(hQueue);
+        ur_device_handle_t Device = GetDevice(hQueue);
         UR_CALL(MemBuffer->getHandle(Device, SrcHandle));
 
         // If user doesn't determine host row pitch and slice pitch, just use
@@ -832,7 +800,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferWriteRect(
 
     if (auto MemBuffer = context.interceptor->getMemBuffer(hBuffer)) {
         char *DstHandle = nullptr;
-        ur_device_handle_t Device = getDevice(hQueue);
+        ur_device_handle_t Device = GetDevice(hQueue);
         UR_CALL(MemBuffer->getHandle(Device, DstHandle));
 
         // If user doesn't determine src/dst row pitch and slice pitch, just use
@@ -922,7 +890,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferCopy(
               UR_RESULT_ERROR_INVALID_MEM_OBJECT);
 
     if (SrcBuffer && DstBuffer) {
-        ur_device_handle_t Device = getDevice(hQueue);
+        ur_device_handle_t Device = GetDevice(hQueue);
         char *SrcHandle = nullptr;
         UR_CALL(SrcBuffer->getHandle(Device, SrcHandle));
 
@@ -991,7 +959,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferCopyRect(
               UR_RESULT_ERROR_INVALID_MEM_OBJECT);
 
     if (SrcBuffer && DstBuffer) {
-        ur_device_handle_t Device = getDevice(hQueue);
+        ur_device_handle_t Device = GetDevice(hQueue);
         char *SrcHandle = nullptr;
         UR_CALL(SrcBuffer->getHandle(Device, SrcHandle));
 
@@ -1017,11 +985,9 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferCopyRect(
         }
 
         // Calculate the src and dst addresses that actually will be copied.
-        char *SrcOrigin = SrcHandle + srcOrigin.x +
-                          srcRowPitch * srcOrigin.y +
+        char *SrcOrigin = SrcHandle + srcOrigin.x + srcRowPitch * srcOrigin.y +
                           srcSlicePitch * srcOrigin.z;
-        char *DstOrigin = DstHandle + dstOrigin.x +
-                          dstRowPitch * dstOrigin.y +
+        char *DstOrigin = DstHandle + dstOrigin.x + dstRowPitch * dstOrigin.y +
                           dstSlicePitch * dstOrigin.z;
 
         std::vector<ur_event_handle_t> Events;
@@ -1079,7 +1045,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferFill(
 
     if (auto MemBuffer = context.interceptor->getMemBuffer(hBuffer)) {
         char *Handle = nullptr;
-        ur_device_handle_t Device = getDevice(hQueue);
+        ur_device_handle_t Device = GetDevice(hQueue);
         UR_CALL(MemBuffer->getHandle(Device, Handle));
         UR_CALL(context.urDdiTable.Enqueue.pfnUSMFill(
             hQueue, Handle + offset, patternSize, pPattern, size,
@@ -1141,13 +1107,13 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferMap(
         UR_ASSERT(AccessMode != MemBuffer::UNKNOWN,
                   UR_RESULT_ERROR_INVALID_ARGUMENT);
 
-        ur_device_handle_t Device = getDevice(hQueue);
+        ur_device_handle_t Device = GetDevice(hQueue);
         // If the buffer used host pointer, then we just reuse it. If not, we
         // need to manually allocate a new host USM.
         if (MemBuffer->HostPtr) {
             *ppRetMap = MemBuffer->HostPtr + offset;
         } else {
-            ur_context_handle_t Context = getContext(hQueue);
+            ur_context_handle_t Context = GetContext(hQueue);
             ur_usm_desc_t USMDesc{};
             USMDesc.align = MemBuffer->getAlignment();
             ur_usm_pool_handle_t Pool{};
@@ -1219,8 +1185,8 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemUnmap(
         // if we allocated a host USM. But for now, UR doesn't support event
         // call back, we can only do blocking copy here.
         char *DstHandle = nullptr;
-        ur_context_handle_t Context = getContext(hQueue);
-        ur_device_handle_t Device = getDevice(hQueue);
+        ur_context_handle_t Context = GetContext(hQueue);
+        ur_device_handle_t Device = GetDevice(hQueue);
         UR_CALL(MemBuffer->getHandle(Device, DstHandle));
         UR_CALL(context.urDdiTable.Enqueue.pfnUSMMemcpy(
             hQueue, true, DstHandle + Mapping.Offset, pMappedPtr, Mapping.Size,
@@ -1253,10 +1219,8 @@ __urdlllocal ur_result_t UR_APICALL urKernelCreate(
 
     context.logger.debug("==== urKernelCreate");
 
-    UR_CALL(pfnCreate(hProgram, pKernelName, phKernel))
-    auto ContextInfo = context.interceptor->getContextInfo(hProgram);
-    std::scoped_lock<ur_shared_mutex> Guard(ContextInfo->Mutex);
-    ContextInfo->KernelMap.emplace(*phKernel, std::make_shared<KernelInfo>());
+    UR_CALL(pfnCreate(hProgram, pKernelName, phKernel));
+    UR_CALL(context.interceptor->insertKernel(*phKernel));
 
     return UR_RESULT_SUCCESS;
 }
@@ -1456,6 +1420,35 @@ __urdlllocal ur_result_t UR_APICALL urGetMemProcAddrTable(
 
     return result;
 }
+/// @brief Exported function for filling application's ProgramExp table
+///        with current process' addresses
+///
+/// @returns
+///     - ::UR_RESULT_SUCCESS
+///     - ::UR_RESULT_ERROR_INVALID_NULL_POINTER
+///     - ::UR_RESULT_ERROR_UNSUPPORTED_VERSION
+__urdlllocal ur_result_t UR_APICALL urGetProgramExpProcAddrTable(
+    ur_api_version_t version, ///< [in] API version requested
+    ur_program_exp_dditable_t
+        *pDdiTable ///< [in,out] pointer to table of DDI function pointers
+) {
+    if (nullptr == pDdiTable) {
+        return UR_RESULT_ERROR_INVALID_NULL_POINTER;
+    }
+
+    if (UR_MAJOR_VERSION(ur_sanitizer_layer::context.version) !=
+            UR_MAJOR_VERSION(version) ||
+        UR_MINOR_VERSION(ur_sanitizer_layer::context.version) >
+            UR_MINOR_VERSION(version)) {
+        return UR_RESULT_ERROR_UNSUPPORTED_VERSION;
+    }
+
+    ur_result_t result = UR_RESULT_SUCCESS;
+
+    pDdiTable->pfnBuildExp = ur_sanitizer_layer::urProgramBuildExp;
+
+    return result;
+}
 ///////////////////////////////////////////////////////////////////////////////
 /// @brief Exported function for filling application's Enqueue table
 ///        with current process' addresses
@@ -1495,37 +1488,7 @@ __urdlllocal ur_result_t UR_APICALL urGetEnqueueProcAddrTable(
     pDdiTable->pfnMemBufferFill = ur_sanitizer_layer::urEnqueueMemBufferFill;
     pDdiTable->pfnMemBufferMap = ur_sanitizer_layer::urEnqueueMemBufferMap;
     pDdiTable->pfnMemUnmap = ur_sanitizer_layer::urEnqueueMemUnmap;
-
-    return result;
-}
-///////////////////////////////////////////////////////////////////////////////
-/// @brief Exported function for filling application's Queue table
-///        with current process' addresses
-///
-/// @returns
-///     - ::UR_RESULT_SUCCESS
-///     - ::UR_RESULT_ERROR_INVALID_NULL_POINTER
-///     - ::UR_RESULT_ERROR_UNSUPPORTED_VERSION
-__urdlllocal ur_result_t UR_APICALL urGetQueueProcAddrTable(
-    ur_api_version_t version, ///< [in] API version requested
-    ur_queue_dditable_t
-        *pDdiTable ///< [in,out] pointer to table of DDI function pointers
-) {
-    if (nullptr == pDdiTable) {
-        return UR_RESULT_ERROR_INVALID_NULL_POINTER;
-    }
-
-    if (UR_MAJOR_VERSION(ur_sanitizer_layer::context.version) !=
-            UR_MAJOR_VERSION(version) ||
-        UR_MINOR_VERSION(ur_sanitizer_layer::context.version) >
-            UR_MINOR_VERSION(version)) {
-        return UR_RESULT_ERROR_UNSUPPORTED_VERSION;
-    }
-
-    ur_result_t result = UR_RESULT_SUCCESS;
-
-    pDdiTable->pfnCreate = ur_sanitizer_layer::urQueueCreate;
-    pDdiTable->pfnRelease = ur_sanitizer_layer::urQueueRelease;
+    pDdiTable->pfnKernelLaunch = ur_sanitizer_layer::urEnqueueKernelLaunch;
 
     return result;
 }
@@ -1615,13 +1578,13 @@ ur_result_t context_t::init(ur_dditable_t *dditable,
     }
 
     if (UR_RESULT_SUCCESS == result) {
-        result = ur_sanitizer_layer::urGetEnqueueProcAddrTable(
-            UR_API_VERSION_CURRENT, &dditable->Enqueue);
+        result = ur_sanitizer_layer::urGetProgramExpProcAddrTable(
+            UR_API_VERSION_CURRENT, &dditable->ProgramExp);
     }
 
     if (UR_RESULT_SUCCESS == result) {
-        result = ur_sanitizer_layer::urGetQueueProcAddrTable(
-            UR_API_VERSION_CURRENT, &dditable->Queue);
+        result = ur_sanitizer_layer::urGetEnqueueProcAddrTable(
+            UR_API_VERSION_CURRENT, &dditable->Enqueue);
     }
 
     if (UR_RESULT_SUCCESS == result) {
@@ -1629,6 +1592,9 @@ ur_result_t context_t::init(ur_dditable_t *dditable,
             UR_API_VERSION_CURRENT, &dditable->USM);
     }
 
+    InitSymbolizers();
+
     return result;
 }
+
 } // namespace ur_sanitizer_layer
