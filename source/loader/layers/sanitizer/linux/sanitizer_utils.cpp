@@ -7,7 +7,7 @@
  * See LICENSE.TXT
  * SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
  *
- * @file san_utils.cpp
+ * @file sanitizer_utils.cpp
  *
  */
 
@@ -27,7 +27,7 @@ namespace ur_sanitizer_layer {
 
 bool IsInASanContext() { return (void *)__asan_init != nullptr; }
 
-static bool ReserveShadowMem(uptr Addr, uptr Size) {
+bool MmapFixedNoReserve(uptr Addr, uptr Size) {
     Size = RoundUpTo(Size, EXEC_PAGESIZE);
     Addr = RoundDownTo(Addr, EXEC_PAGESIZE);
     void *P =
@@ -36,42 +36,14 @@ static bool ReserveShadowMem(uptr Addr, uptr Size) {
     return Addr == (uptr)P;
 }
 
-static bool ProtectShadowGap(uptr Addr, uptr Size) {
+bool MmapFixedNoAccess(uptr Addr, uptr Size) {
     void *P =
         mmap((void *)Addr, Size, PROT_NONE,
              MAP_PRIVATE | MAP_FIXED | MAP_NORESERVE | MAP_ANONYMOUS, -1, 0);
     return Addr == (uptr)P;
 }
 
-bool SetupShadowMem() {
-    if (!ReserveShadowMem(LOW_SHADOW_BEGIN, LOW_SHADOW_SIZE)) {
-        return false;
-    }
-
-    if (!ReserveShadowMem(HIGH_SHADOW_BEGIN, HIGH_SHADOW_SIZE)) {
-        return false;
-    }
-
-    if (!ProtectShadowGap(SHADOW_GAP_BEGIN, SHADOW_GAP_SIZE)) {
-        return false;
-    }
-    return true;
-}
-
-bool DestroyShadowMem() {
-    if (munmap((void *)LOW_SHADOW_BEGIN, LOW_SHADOW_SIZE) == -1) {
-        return false;
-    }
-
-    if (munmap((void *)HIGH_SHADOW_BEGIN, HIGH_SHADOW_SIZE) == -1) {
-        return false;
-    }
-
-    if (munmap((void *)SHADOW_GAP_BEGIN, SHADOW_GAP_SIZE) == -1) {
-        return false;
-    }
-    return true;
-}
+bool Munmap(uptr Addr, uptr Size) { return munmap((void *)Addr, Size) == 0; }
 
 void *GetMemFunctionPointer(const char *FuncName) {
     void *handle = dlopen(LIBC_SO, RTLD_LAZY | RTLD_NOLOAD);
@@ -93,6 +65,19 @@ std::string DemangleName(const std::string &name) {
     if (demangled) {
         result = demangled;
         free(demangled);
+    }
+    return result;
+}
+
+std::string RunCommand(const char *cmd) {
+    std::array<char, 128> buffer;
+    std::string result;
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd, "r"), pclose);
+    if (!pipe) {
+        throw std::runtime_error("popen() failed!");
+    }
+    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+        result += buffer.data();
     }
     return result;
 }
