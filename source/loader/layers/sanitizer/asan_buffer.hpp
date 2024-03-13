@@ -81,7 +81,9 @@ struct MemBuffer {
     std::unordered_map<void *, Mapping> Mappings;
 
     ur_context_handle_t Context;
+
     size_t Size;
+
     char *HostPtr{nullptr};
 
     struct SubBuffer_t {
@@ -90,7 +92,9 @@ struct MemBuffer {
     };
 
     std::optional<SubBuffer_t> SubBuffer;
+
     ReferenceCounter RefCount;
+
     ur_shared_mutex Mutex;
 };
 

@@ -13,6 +13,7 @@
 #include "asan_buffer.hpp"
 #include "asan_interceptor.hpp"
 #include "ur_sanitizer_layer.hpp"
+#include "ur_sanitizer_utils.hpp"
 
 namespace ur_sanitizer_layer {
 
@@ -29,16 +30,25 @@ ur_result_t MemBuffer::getHandle(ur_device_handle_t Device, char *&Handle) {
         ur_usm_desc_t USMDesc{};
         USMDesc.align = getAlignment();
         ur_usm_pool_handle_t Pool{};
-        UR_CALL(context.interceptor->allocateMemory(
+        ur_result_t URes = context.interceptor->allocateMemory(
             Context, Device, &USMDesc, Pool, Size, (void **)&Allocation,
-            AllocType::MEM_BUFFER));
+            AllocType::MEM_BUFFER);
+        if (URes != UR_RESULT_SUCCESS) {
+            context.logger.error(
+                "Failed to allocate {} bytes memory for buffer {}", Size, this);
+            return URes;
+        }
 
         if (HostPtr) {
-            ur_queue_handle_t Queue;
-            UR_CALL(context.urDdiTable.Queue.pfnCreate(Context, Device, nullptr,
-                                                       &Queue));
-            UR_CALL(context.urDdiTable.Enqueue.pfnUSMMemcpy(
-                Queue, true, Allocation, HostPtr, Size, 0, nullptr, nullptr));
+            ManagedQueue Queue(Context, Device);
+            URes = context.urDdiTable.Enqueue.pfnUSMMemcpy(
+                Queue, true, Allocation, HostPtr, Size, 0, nullptr, nullptr);
+            if (URes != UR_RESULT_SUCCESS) {
+                context.logger.error("Failed to copy {} bytes data from host "
+                                     "pointer {} to buffer {}",
+                                     Size, HostPtr, this);
+                return URes;
+            }
         }
         Handle = Allocation;
     } else {
@@ -49,11 +59,11 @@ ur_result_t MemBuffer::getHandle(ur_device_handle_t Device, char *&Handle) {
 }
 
 ur_result_t MemBuffer::free() {
-    for (auto &Pair : Allocations) {
-        void *Ptr = Pair.second;
-        context.logger.debug("MemBuffer::free(Trying to release pointer {})",
-                             Ptr);
-        UR_CALL(context.interceptor->releaseMemory(Context, Ptr));
+    for (const auto &[_, Ptr] : Allocations) {
+        ur_result_t URes = context.interceptor->releaseMemory(Context, Ptr);
+        if (URes != UR_RESULT_SUCCESS) {
+            context.logger.error("Failed to free buffer handle {}", Ptr);
+        }
     }
     Allocations.clear();
     return UR_RESULT_SUCCESS;

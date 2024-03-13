@@ -655,6 +655,8 @@ ur_result_t SanitizerInterceptor::insertKernel(ur_kernel_handle_t Kernel) {
 ur_result_t
 SanitizerInterceptor::insertMemBuffer(std::shared_ptr<MemBuffer> MemBuffer) {
     std::scoped_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
+    assert(m_MemBufferMap.find(ur_cast<ur_mem_handle_t>(MemBuffer.get())) ==
+           m_MemBufferMap.end());
     m_MemBufferMap.emplace(reinterpret_cast<ur_mem_handle_t>(MemBuffer.get()),
                            MemBuffer);
     return UR_RESULT_SUCCESS;
@@ -685,15 +687,18 @@ ur_result_t SanitizerInterceptor::prepareLaunch(
     do {
         // set kernel args
         auto KernelInfo = getKernelInfo(Kernel);
-        for (auto &Pair : KernelInfo->ArgumentsMap) {
+        for (const auto &[ArgIndex, MemBuffer] : KernelInfo->ArgumentsMap) {
             char *ArgPointer = nullptr;
-            UR_CALL(Pair.second->getHandle(DeviceInfo->Handle, ArgPointer));
-            UR_CALL(context.urDdiTable.Kernel.pfnSetArgPointer(
-                Kernel, Pair.first, nullptr, &ArgPointer));
-
-            context.logger.debug(
-                "Set Kernel {} argument, index {}, arg pointer {}", Kernel,
-                Pair.first, (void *)ArgPointer);
+            UR_CALL(MemBuffer->getHandle(DeviceInfo->Handle, ArgPointer));
+            ur_result_t URes = context.urDdiTable.Kernel.pfnSetArgPointer(
+                Kernel, ArgIndex, nullptr, &ArgPointer);
+            if (URes != UR_RESULT_SUCCESS) {
+                context.logger.error(
+                    "Failed to set buffer {} as the {} arg to kernel {}",
+                    ur_cast<ur_mem_handle_t>(MemBuffer.get()), ArgIndex,
+                    Kernel);
+                return URes;
+            }
         }
 
         // Set global variable to program

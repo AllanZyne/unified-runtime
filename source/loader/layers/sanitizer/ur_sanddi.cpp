@@ -348,34 +348,7 @@ __urdlllocal ur_result_t UR_APICALL urMemBufferCreate(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
-    context.logger.debug("urMemBufferCreate: flags {}, pProperties {}", flags,
-                         *pProperties);
-
-    switch (flags) {
-    case UR_MEM_FLAG_READ_WRITE:
-        context.logger.debug("==== urMemBufferCreate: READ_WRITE");
-        break;
-    case UR_MEM_FLAG_WRITE_ONLY:
-        context.logger.debug("==== urMemBufferCreate: WRITE");
-        break;
-    case UR_MEM_FLAG_READ_ONLY:
-        context.logger.debug("==== urMemBufferCreate: READ");
-        break;
-    case UR_MEM_FLAG_USE_HOST_POINTER:
-        context.logger.debug("==== urMemBufferCreate: USE_HOST_POINTER {}",
-                             pProperties->pHost);
-        break;
-    case UR_MEM_FLAG_ALLOC_HOST_POINTER:
-        context.logger.debug("==== urMemBufferCreate: ALLOC_HOST_POINTER",
-                             pProperties->pHost);
-        break;
-    case UR_MEM_FLAG_ALLOC_COPY_HOST_POINTER:
-        context.logger.debug("==== urMemBufferCreate: ALLOC_COPY_HOST_POINTER",
-                             pProperties->pHost);
-        break;
-    default:
-        context.logger.debug("==== urMemBufferCreate");
-    }
+    context.logger.debug("==== urMemBufferCreate");
 
     char *hostPtrOrNull = (flags & UR_MEM_FLAG_USE_HOST_POINTER)
                               ? ur_cast<char *>(pProperties->pHost)
@@ -385,9 +358,6 @@ __urdlllocal ur_result_t UR_APICALL urMemBufferCreate(
         std::make_shared<MemBuffer>(hContext, size, hostPtrOrNull);
     ur_result_t result = context.interceptor->insertMemBuffer(pMemBuffer);
     *phBuffer = ur_cast<ur_mem_handle_t>(pMemBuffer.get());
-
-    context.logger.debug("==== urMemBufferCreate: return pointer {}",
-                         *phBuffer);
 
     return result;
 }
@@ -449,6 +419,8 @@ __urdlllocal ur_result_t UR_APICALL urMemRetain(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
+    context.logger.debug("==== urMemRetain");
+
     if (auto MemBuffer = context.interceptor->getMemBuffer(hMem)) {
         MemBuffer->RefCount.increment();
     } else {
@@ -502,8 +474,7 @@ __urdlllocal ur_result_t UR_APICALL urMemBufferPartition(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
-    context.logger.debug("==== urMemBufferPartition: Origin {}, Size {}",
-                         pRegion->origin, pRegion->size);
+    context.logger.debug("==== urMemBufferPartition");
 
     if (auto ParentBuffer = context.interceptor->getMemBuffer(hBuffer)) {
         std::shared_ptr<MemBuffer> SubBuffer = std::make_shared<MemBuffer>(
@@ -514,9 +485,6 @@ __urdlllocal ur_result_t UR_APICALL urMemBufferPartition(
         UR_CALL(pfnBufferPartition(hBuffer, flags, bufferCreateType, pRegion,
                                    phMem));
     }
-
-    context.logger.debug("==== urMemBufferPartition: return pointer {}",
-                         *phMem);
 
     return UR_RESULT_SUCCESS;
 }
@@ -534,6 +502,8 @@ __urdlllocal ur_result_t UR_APICALL urMemGetNativeHandle(
     if (nullptr == pfnGetNativeHandle) {
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
+
+    context.logger.debug("==== urMemGetNativeHandle");
 
     if (auto MemBuffer = context.interceptor->getMemBuffer(hMem)) {
         char *Handle = nullptr;
@@ -578,11 +548,6 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferRead(
         ur_device_handle_t Device = GetDevice(hQueue);
         char *pSrc = nullptr;
         UR_CALL(MemBuffer->getHandle(Device, pSrc));
-
-        context.logger.debug(
-            "urEnqueueMemBufferRead(Trying to copy {} bytes from {} to {} )",
-            size, pSrc, pDst);
-
         UR_CALL(context.urDdiTable.Enqueue.pfnUSMMemcpy(
             hQueue, blockingRead, pDst, pSrc + offset, size,
             numEventsInWaitList, phEventWaitList, phEvent));
@@ -629,11 +594,6 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferWrite(
         ur_device_handle_t Device = GetDevice(hQueue);
         char *pDst = nullptr;
         UR_CALL(MemBuffer->getHandle(Device, pDst));
-
-        context.logger.debug(
-            "urEnqueueMemBufferWrite(Trying to copy {} bytes from {} to {} )",
-            size, pSrc, pDst);
-
         UR_CALL(context.urDdiTable.Enqueue.pfnUSMMemcpy(
             hQueue, blockingWrite, pDst + offset, pSrc, size,
             numEventsInWaitList, phEventWaitList, phEvent));
@@ -684,12 +644,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferReadRect(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
-    context.logger.debug(
-        "urEnqueueMemBufferReadRect: buffer_offset {}, host_offset {}, region "
-        "{}, buffer row pitch {}, buffer slice pitch {}, host row pitch {}, "
-        "host slice pitch {}",
-        bufferOrigin, hostOrigin, region, bufferRowPitch, bufferSlicePitch,
-        hostRowPitch, hostSlicePitch);
+    context.logger.debug("==== urEnqueueMemBufferReadRect");
 
     if (auto MemBuffer = context.interceptor->getMemBuffer(hBuffer)) {
         char *SrcHandle = nullptr;
@@ -791,12 +746,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferWriteRect(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
-    context.logger.debug(
-        "urEnqueueMemBufferWriteRect: buffer_offset {}, host_offset {}, region "
-        "{}, buffer row pitch {}, buffer slice pitch {}, host row pitch {}, "
-        "host slice pitch {}",
-        bufferOrigin, hostOrigin, region, bufferRowPitch, bufferSlicePitch,
-        hostRowPitch, hostSlicePitch);
+    context.logger.debug("==== urEnqueueMemBufferWriteRect");
 
     if (auto MemBuffer = context.interceptor->getMemBuffer(hBuffer)) {
         char *DstHandle = nullptr;
@@ -883,6 +833,8 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferCopy(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
+    context.logger.debug("==== urEnqueueMemBufferCopy");
+
     auto SrcBuffer = context.interceptor->getMemBuffer(hBufferSrc);
     auto DstBuffer = context.interceptor->getMemBuffer(hBufferDst);
 
@@ -945,12 +897,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferCopyRect(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
-    context.logger.debug(
-        "urEnqueueMemBufferCopyRect: src_offset {}, dst_offset {}, region "
-        "{}, src row pitch {}, src slice pitch {}, dst row pitch {}, "
-        "dst slice pitch {}",
-        srcOrigin, dstOrigin, region, srcRowPitch, srcSlicePitch, dstRowPitch,
-        dstSlicePitch);
+    context.logger.debug("==== urEnqueueMemBufferCopyRect");
 
     auto SrcBuffer = context.interceptor->getMemBuffer(hBufferSrc);
     auto DstBuffer = context.interceptor->getMemBuffer(hBufferDst);
@@ -1043,6 +990,8 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferFill(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
+    context.logger.debug("==== urEnqueueMemBufferFill");
+
     if (auto MemBuffer = context.interceptor->getMemBuffer(hBuffer)) {
         char *Handle = nullptr;
         ur_device_handle_t Device = GetDevice(hQueue);
@@ -1086,6 +1035,8 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferMap(
     if (nullptr == pfnMemBufferMap) {
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
+
+    context.logger.debug("==== urEnqueueMemBufferMap");
 
     if (auto MemBuffer = context.interceptor->getMemBuffer(hBuffer)) {
 
@@ -1170,6 +1121,8 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemUnmap(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
+    context.logger.debug("==== urEnqueueMemUnmap");
+
     if (auto MemBuffer = context.interceptor->getMemBuffer(hMem)) {
         MemBuffer::Mapping Mapping{};
         {
@@ -1251,8 +1204,6 @@ __urdlllocal ur_result_t UR_APICALL urKernelSetArgValue(
         auto KernelInfo = context.interceptor->getKernelInfo(hKernel);
         std::scoped_lock<ur_shared_mutex> Guard(KernelInfo->Mutex);
         KernelInfo->ArgumentsMap.emplace(argIndex, MemBuffer);
-        context.logger.debug("AddMemArgs({}, {})", argIndex,
-                             (void *)MemBuffer.get());
     } else {
         UR_CALL(
             pfnSetArgValue(hKernel, argIndex, argSize, pProperties, pArgValue));
@@ -1282,8 +1233,6 @@ __urdlllocal ur_result_t UR_APICALL urKernelSetArgMemObj(
         auto KernelInfo = context.interceptor->getKernelInfo(hKernel);
         std::scoped_lock<ur_shared_mutex> Guard(KernelInfo->Mutex);
         KernelInfo->ArgumentsMap.emplace(argIndex, pMemBuffer);
-        context.logger.debug("AddMemArgs({}, {})", argIndex,
-                             (void *)pMemBuffer.get());
     } else {
         UR_CALL(pfnSetArgMemObj(hKernel, argIndex, pProperties, hArgValue));
     }
