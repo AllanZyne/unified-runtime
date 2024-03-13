@@ -84,7 +84,7 @@ struct MemBuffer {
 
     size_t Size;
 
-    char *HostPtr{nullptr};
+    char *HostPtr{};
 
     struct SubBuffer_t {
         std::shared_ptr<MemBuffer> Parent;

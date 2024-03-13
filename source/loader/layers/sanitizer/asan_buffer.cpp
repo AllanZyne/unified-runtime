@@ -50,10 +50,9 @@ ur_result_t MemBuffer::getHandle(ur_device_handle_t Device, char *&Handle) {
                 return URes;
             }
         }
-        Handle = Allocation;
-    } else {
-        Handle = Allocation;
     }
+
+    Handle = Allocation;
 
     return UR_RESULT_SUCCESS;
 }
@@ -63,6 +62,7 @@ ur_result_t MemBuffer::free() {
         ur_result_t URes = context.interceptor->releaseMemory(Context, Ptr);
         if (URes != UR_RESULT_SUCCESS) {
             context.logger.error("Failed to free buffer handle {}", Ptr);
+            return URes;
         }
     }
     Allocations.clear();
