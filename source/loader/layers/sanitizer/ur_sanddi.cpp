@@ -217,14 +217,22 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueKernelLaunch(
 
     context.logger.debug("==== urEnqueueKernelLaunch");
 
-    LaunchInfo LaunchInfo;
+    auto hContext = getContext(hQueue);
+    LaunchInfo *pLaunchInfoRaw = nullptr;
+    UR_CALL(context.urDdiTable.USM.pfnHostAlloc(hContext, nullptr, nullptr,
+                                                sizeof(LaunchInfo),
+                                                (void **)&pLaunchInfoRaw));
+    context.logger.debug("LaunchInfo: {}", (void *)pLaunchInfoRaw);
+    std::unique_ptr<LaunchInfo, UrUSMFree> pLaunchInfo(pLaunchInfoRaw,
+                                                       UrUSMFree(hContext));
+
     const size_t *pUserLocalWorkSize = pLocalWorkSize;
     if (!pUserLocalWorkSize) {
-        pUserLocalWorkSize = LaunchInfo.LocalWorkSize;
+        pUserLocalWorkSize = pLaunchInfo->LocalWorkSize;
         // FIXME: This is W/A until urKernelSuggestGroupSize is added
-        LaunchInfo.LocalWorkSize[0] = 1;
-        LaunchInfo.LocalWorkSize[1] = 1;
-        LaunchInfo.LocalWorkSize[2] = 1;
+        pLaunchInfo->LocalWorkSize[0] = 1;
+        pLaunchInfo->LocalWorkSize[1] = 1;
+        pLaunchInfo->LocalWorkSize[2] = 1;
     }
 
     uint32_t numWork = 1;
@@ -241,7 +249,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueKernelLaunch(
     // preLaunchKernel must append to num_events_in_wait_list, not prepend
     ur_event_handle_t hPreEvent{};
     UR_CALL(context.interceptor->preLaunchKernel(hKernel, hQueue, hPreEvent,
-                                                 LaunchInfo, numWork));
+                                                 pLaunchInfo, numWork));
     if (hPreEvent) {
         hEvents.push_back(hPreEvent);
     }
@@ -253,7 +261,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueKernelLaunch(
 
     if (result == UR_RESULT_SUCCESS) {
         context.interceptor->postLaunchKernel(hKernel, hQueue, hEvent,
-                                              LaunchInfo);
+                                              pLaunchInfo);
     }
 
     if (phEvent) {
@@ -364,6 +372,34 @@ __urdlllocal ur_result_t UR_APICALL urContextRelease(
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+/// @brief Intercept function for urKernelCreate
+__urdlllocal ur_result_t UR_APICALL urKernelCreate(
+    ur_program_handle_t hProgram, ///< [in] handle of the program instance
+    const char *pKernelName,      ///< [in] pointer to null-terminated string.
+    ur_kernel_handle_t
+        *phKernel ///< [out] pointer to handle of kernel object created.
+) {
+    auto pfnCreate = context.urDdiTable.Kernel.pfnCreate;
+
+    if (nullptr == pfnCreate) {
+        return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
+    }
+
+    context.logger.debug("==== urKernelCreate");
+
+    ur_result_t result = pfnCreate(hProgram, pKernelName, phKernel);
+    if (result == UR_RESULT_SUCCESS) {
+        auto hContext = getContext(hProgram);
+        auto ContextInfo = context.interceptor->getContextInfo(hContext);
+        std::scoped_lock<ur_shared_mutex> Guard(ContextInfo->Mutex);
+        ContextInfo->KernelMap.emplace(*phKernel,
+                                       std::make_shared<KernelInfo>());
+    }
+
+    return result;
+}
+
+///////////////////////////////////////////////////////////////////////////////
 /// @brief Exported function for filling application's Context table
 ///        with current process' addresses
 ///
@@ -391,7 +427,6 @@ __urdlllocal ur_result_t UR_APICALL urGetContextProcAddrTable(
 
     pDdiTable->pfnCreate = ur_sanitizer_layer::urContextCreate;
     pDdiTable->pfnRelease = ur_sanitizer_layer::urContextRelease;
-
     pDdiTable->pfnCreateWithNativeHandle =
         ur_sanitizer_layer::urContextCreateWithNativeHandle;
 
@@ -541,11 +576,11 @@ ur_result_t context_t::init(ur_dditable_t *dditable,
     if (context.enabledType == SanitizerType::AddressSanitizer) {
         if (!(dditable->VirtualMem.pfnReserve && dditable->VirtualMem.pfnMap &&
               dditable->VirtualMem.pfnGranularityGetInfo)) {
-            die("Some VirtualMem APIs are needed to enable UR_LAYER_ASAN");
+            // die("Some VirtualMem APIs are needed to enable UR_LAYER_ASAN");
         }
 
         if (!dditable->PhysicalMem.pfnCreate) {
-            die("Some PhysicalMem APIs are needed to enable UR_LAYER_ASAN");
+            // die("Some PhysicalMem APIs are needed to enable UR_LAYER_ASAN");
         }
     }
 

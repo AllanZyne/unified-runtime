@@ -17,7 +17,6 @@
 
 #include <map>
 #include <memory>
-#include <unordered_map>
 #include <vector>
 
 namespace ur_sanitizer_layer {
@@ -30,6 +29,8 @@ enum class AllocType : uint32_t {
     DEVICE_GLOBAL
 };
 
+enum class DeviceType : uint32_t { UNKNOWN, CPU, GPU_PVC, GPU_DG2 };
+
 struct AllocInfo {
     uptr AllocBegin;
     uptr UserBegin;
@@ -38,7 +39,24 @@ struct AllocInfo {
     AllocType Type;
 };
 
-enum class DeviceType { UNKNOWN, CPU, GPU_PVC, GPU_DG2 };
+struct MemBuffer {
+    ur_mem_handle_t Buffer;
+    size_t Size;
+    size_t SizeWithRZ;
+
+    AllocInfo getAllocInfo(ur_device_handle_t Device);
+};
+
+// struct MemBuffer2 {
+//     // urMemBufferCreateWithNativeHandle
+//     // void* RawMem;
+//     std::unordered_map<DeviceType, void *> RawMem;
+//     std::unordered_map<DeviceType, ur_mem_handle_t> Buffer;
+//     size_t Size;
+//     size_t SizeWithRZ;
+
+//     AllocInfo getAllocInfo(ur_device_handle_t Device);
+// };
 
 struct DeviceInfo {
     DeviceType Type;
@@ -56,6 +74,11 @@ struct QueueInfo {
     ur_event_handle_t LastEvent;
 };
 
+struct KernelInfo {
+    ur_shared_mutex Mutex;
+    std::unordered_map<int, std::weak_ptr<MemBuffer>> ArgumentsMap;
+};
+
 struct ContextInfo {
 
     std::shared_ptr<DeviceInfo> getDeviceInfo(ur_device_handle_t Device) {
@@ -70,6 +93,12 @@ struct ContextInfo {
         return QueueMap[Queue];
     }
 
+    std::shared_ptr<KernelInfo> getKernelInfo(ur_kernel_handle_t Kernel) {
+        std::shared_lock<ur_shared_mutex> Guard(Mutex);
+        assert(KernelMap.find(Kernel) != KernelMap.end());
+        return KernelMap[Kernel];
+    }
+
     std::shared_ptr<AllocInfo> getUSMAllocInfo(uptr Address) {
         std::shared_lock<ur_shared_mutex> Guard(Mutex);
         assert(AllocatedUSMMap.find(Address) != AllocatedUSMMap.end());
@@ -80,6 +109,8 @@ struct ContextInfo {
     std::unordered_map<ur_device_handle_t, std::shared_ptr<DeviceInfo>>
         DeviceMap;
     std::unordered_map<ur_queue_handle_t, std::shared_ptr<QueueInfo>> QueueMap;
+    std::unordered_map<ur_kernel_handle_t, std::shared_ptr<KernelInfo>>
+        KernelMap;
 
     /// key: USMAllocInfo.AllocBegin
     /// value: USMAllocInfo
@@ -87,17 +118,16 @@ struct ContextInfo {
     std::map<uptr, std::shared_ptr<AllocInfo>> AllocatedUSMMap;
 };
 
-struct LaunchInfo {
-    uptr LocalShadowOffset;
-    uptr LocalShadowOffsetEnd;
-    ur_context_handle_t Context;
-
+struct LaunchInfoBase {
+    uptr LocalShadowOffset = 0;
+    uptr LocalShadowOffsetEnd = 0;
     DeviceSanitizerReport SPIR_DeviceSanitizerReportMem;
+};
 
+struct LaunchInfo : LaunchInfoBase {
+    ur_context_handle_t Context = nullptr;
     size_t LocalWorkSize[3];
 
-    LaunchInfo()
-        : LocalShadowOffset(0), LocalShadowOffsetEnd(0), Context(nullptr) {}
     ~LaunchInfo();
 };
 
@@ -123,12 +153,14 @@ class SanitizerInterceptor {
     ur_result_t registerDeviceGlobals(ur_context_handle_t Context,
                                       ur_program_handle_t Program);
 
-    ur_result_t preLaunchKernel(ur_kernel_handle_t Kernel,
-                                ur_queue_handle_t Queue,
-                                ur_event_handle_t &Event,
-                                LaunchInfo &LaunchInfo, uint32_t numWorkgroup);
+    ur_result_t
+    preLaunchKernel(ur_kernel_handle_t Kernel, ur_queue_handle_t Queue,
+                    ur_event_handle_t &Event,
+                    std::unique_ptr<LaunchInfo, UrUSMFree> &LaunchInfo,
+                    uint32_t numWorkgroup);
     void postLaunchKernel(ur_kernel_handle_t Kernel, ur_queue_handle_t Queue,
-                          ur_event_handle_t &Event, LaunchInfo &LaunchInfo);
+                          ur_event_handle_t &Event,
+                          std::unique_ptr<LaunchInfo, UrUSMFree> &LaunchInfo);
 
     ur_result_t insertContext(ur_context_handle_t Context);
     ur_result_t eraseContext(ur_context_handle_t Context);
@@ -141,27 +173,12 @@ class SanitizerInterceptor {
     ur_result_t eraseQueue(ur_context_handle_t Context,
                            ur_queue_handle_t Queue);
 
-  private:
-    ur_result_t updateShadowMemory(ur_queue_handle_t Queue);
-    ur_result_t enqueueAllocInfo(ur_context_handle_t Context,
-                                 ur_device_handle_t Device,
-                                 ur_queue_handle_t Queue,
-                                 std::shared_ptr<AllocInfo> &AI,
-                                 ur_event_handle_t &LastEvent);
-
-    /// Initialize Global Variables & Kernel Name at first Launch
-    ur_result_t prepareLaunch(ur_queue_handle_t Queue,
-                              ur_kernel_handle_t Kernel, LaunchInfo &LaunchInfo,
-                              uint32_t numWorkgroup);
-
-    ur_result_t allocShadowMemory(ur_context_handle_t Context,
-                                  std::shared_ptr<DeviceInfo> &DeviceInfo);
-    ur_result_t enqueueMemSetShadow(ur_context_handle_t Context,
-                                    ur_device_handle_t Device,
-                                    ur_queue_handle_t Queue, uptr Addr,
-                                    uptr Size, u8 Value,
-                                    ur_event_handle_t DepEvent,
-                                    ur_event_handle_t *OutEvent);
+    void insertMemBuffer(std::shared_ptr<MemBuffer> MemBuffer) {
+        std::scoped_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
+        assert(m_MemBufferMap.find(MemBuffer->Buffer) == m_MemBufferMap.end());
+        m_MemBufferMap.emplace(
+            reinterpret_cast<ur_mem_handle_t>(MemBuffer.get()), MemBuffer);
+    }
 
     std::shared_ptr<ContextInfo> getContextInfo(ur_context_handle_t Context) {
         std::shared_lock<ur_shared_mutex> Guard(m_ContextMapMutex);
@@ -170,9 +187,51 @@ class SanitizerInterceptor {
     }
 
   private:
+    ur_result_t updateShadowMemory(ur_queue_handle_t Queue);
+
+    void eraseMemBuffer(ur_mem_handle_t MemHandle) {
+        std::scoped_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
+        assert(m_MemBufferMap.find(MemHandle) != m_MemBufferMap.end());
+        m_MemBufferMap.erase(MemHandle);
+    }
+
+    std::shared_ptr<MemBuffer> getMemBuffer(ur_mem_handle_t MemHandle) {
+        std::shared_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
+        if (m_MemBufferMap.count(MemHandle)) {
+            return m_MemBufferMap.at(MemHandle);
+        }
+        return nullptr;
+    }
+
+    ur_mem_handle_t getMemHandle(ur_mem_handle_t MemHandle) {
+        std::shared_lock<ur_shared_mutex> Guard(m_MemBufferMapMutex);
+        if (m_MemBufferMap.count(MemHandle)) {
+            return m_MemBufferMap.at(MemHandle).get()->Buffer;
+        }
+        return MemHandle;
+    }
+
+  private:
+    ur_result_t updateShadowMemory(ur_kernel_handle_t Kernel,
+                                   ur_queue_handle_t Queue);
+
+    /// Initialize Global Variables & Kernel Name at first Launch
+    ur_result_t
+    prepareLaunch(ur_queue_handle_t Queue, ur_kernel_handle_t Kernel,
+                  std::unique_ptr<LaunchInfo, UrUSMFree> &LaunchInfo,
+                  uint32_t numWorkgroup);
+
+    ur_result_t allocShadowMemory(ur_context_handle_t Context,
+                                  std::shared_ptr<DeviceInfo> &DeviceInfo);
+
+  private:
     std::unordered_map<ur_context_handle_t, std::shared_ptr<ContextInfo>>
         m_ContextMap;
     ur_shared_mutex m_ContextMapMutex;
+
+    std::unordered_map<ur_mem_handle_t, std::shared_ptr<MemBuffer>>
+        m_MemBufferMap;
+    ur_shared_mutex m_MemBufferMapMutex;
 
     bool m_IsInASanContext;
     bool m_ShadowMemInited;
