@@ -64,4 +64,11 @@ struct MemBuffer {
     ur_shared_mutex Mutex;
 };
 
+ur_result_t EnqueueMemCopyRectHelper(
+    ur_queue_handle_t Queue, char *pSrc, char *pDst, ur_rect_offset_t SrcOffset,
+    ur_rect_offset_t DstOffset, ur_rect_region_t Region, size_t SrcRowPitch,
+    size_t SrcSlicePitch, size_t DstRowPitch, size_t DstSlicePitch,
+    bool Blocking, uint32_t NumEventsInWaitList,
+    const ur_event_handle_t *EventWaitList, ur_event_handle_t *Event);
+
 } // namespace ur_sanitizer_layer

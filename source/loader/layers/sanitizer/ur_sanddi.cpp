@@ -651,49 +651,11 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferReadRect(
         ur_device_handle_t Device = GetDevice(hQueue);
         UR_CALL(MemBuffer->getHandle(Device, SrcHandle));
 
-        // If user doesn't determine host row pitch and slice pitch, just use
-        // region for it.
-        if (hostRowPitch == 0) {
-            hostRowPitch = region.width;
-        }
-
-        if (hostSlicePitch == 0) {
-            hostSlicePitch = hostRowPitch * region.height;
-        }
-
-        if (bufferRowPitch == 0) {
-            bufferRowPitch = region.width;
-        }
-
-        if (bufferSlicePitch == 0) {
-            bufferSlicePitch = bufferRowPitch * region.height;
-        }
-
-        // Calculate the src and dst addresses that actually will be copied.
-        char *SrcOrigin = SrcHandle + bufferOrigin.x +
-                          bufferRowPitch * bufferOrigin.y +
-                          bufferSlicePitch * bufferOrigin.z;
-        char *DstOrigin = ur_cast<char *>(pDst) + hostOrigin.x +
-                          hostRowPitch * hostOrigin.y +
-                          hostSlicePitch * hostOrigin.z;
-
-        std::vector<ur_event_handle_t> Events;
-        Events.reserve(region.depth);
-        // For now, USM doesn't support 3D memory copy operation, so we can only
-        // loop call 2D memory copy function to implement it.
-        for (size_t i = 0; i < region.depth; i++) {
-            ur_event_handle_t NewEvent{};
-            UR_CALL(context.urDdiTable.Enqueue.pfnUSMMemcpy2D(
-                hQueue, blockingRead, DstOrigin + (i * hostSlicePitch),
-                hostRowPitch, SrcOrigin + (i * bufferSlicePitch),
-                bufferRowPitch, region.width, region.height,
-                numEventsInWaitList, phEventWaitList, &NewEvent));
-
-            Events.push_back(NewEvent);
-        }
-
-        UR_CALL(context.urDdiTable.Enqueue.pfnEventsWait(
-            hQueue, Events.size(), Events.data(), phEvent));
+        UR_CALL(EnqueueMemCopyRectHelper(
+            hQueue, SrcHandle, ur_cast<char *>(pDst), bufferOrigin, hostOrigin,
+            region, bufferRowPitch, bufferSlicePitch, hostRowPitch,
+            hostSlicePitch, blockingRead, numEventsInWaitList, phEventWaitList,
+            phEvent));
     } else {
         UR_CALL(pfnMemBufferReadRect(
             hQueue, hBuffer, blockingRead, bufferOrigin, hostOrigin, region,
@@ -753,49 +715,11 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferWriteRect(
         ur_device_handle_t Device = GetDevice(hQueue);
         UR_CALL(MemBuffer->getHandle(Device, DstHandle));
 
-        // If user doesn't determine src/dst row pitch and slice pitch, just use
-        // region for it.
-        if (hostRowPitch == 0) {
-            hostRowPitch = region.width;
-        }
-
-        if (hostSlicePitch == 0) {
-            hostSlicePitch = hostRowPitch * region.height;
-        }
-
-        if (bufferRowPitch == 0) {
-            bufferRowPitch = region.width;
-        }
-
-        if (bufferSlicePitch == 0) {
-            bufferSlicePitch = bufferRowPitch * region.height;
-        }
-
-        // Calculate the src and dst addresses that actually will be copied.
-        char *SrcOrigin = ur_cast<char *>(pSrc) + hostOrigin.x +
-                          hostRowPitch * hostOrigin.y +
-                          hostSlicePitch * hostOrigin.z;
-        char *DstOrigin = DstHandle + bufferOrigin.x +
-                          bufferRowPitch * bufferOrigin.y +
-                          bufferSlicePitch * bufferOrigin.z;
-
-        std::vector<ur_event_handle_t> Events;
-        Events.reserve(region.depth);
-        // For now, USM doesn't support 3D memory copy operation, so we can only
-        // loop call 2D memory copy function to implement it.
-        for (size_t i = 0; i < region.depth; i++) {
-            ur_event_handle_t NewEvent{};
-            UR_CALL(context.urDdiTable.Enqueue.pfnUSMMemcpy2D(
-                hQueue, blockingWrite, DstOrigin + (i * bufferSlicePitch),
-                bufferRowPitch, SrcOrigin + (i * hostSlicePitch), hostRowPitch,
-                region.width, region.height, numEventsInWaitList,
-                phEventWaitList, &NewEvent));
-
-            Events.push_back(NewEvent);
-        }
-
-        UR_CALL(context.urDdiTable.Enqueue.pfnEventsWait(
-            hQueue, Events.size(), Events.data(), phEvent));
+        UR_CALL(EnqueueMemCopyRectHelper(
+            hQueue, ur_cast<char *>(pSrc), DstHandle, hostOrigin, bufferOrigin,
+            region, hostRowPitch, hostSlicePitch, bufferRowPitch,
+            bufferSlicePitch, blockingWrite, numEventsInWaitList,
+            phEventWaitList, phEvent));
     } else {
         UR_CALL(pfnMemBufferWriteRect(
             hQueue, hBuffer, blockingWrite, bufferOrigin, hostOrigin, region,
@@ -913,47 +837,10 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferCopyRect(
         char *DstHandle = nullptr;
         UR_CALL(DstBuffer->getHandle(Device, DstHandle));
 
-        // If user doesn't determine src/dst row pitch and slice pitch, just use
-        // region for it.
-        if (srcRowPitch == 0) {
-            srcRowPitch = region.width;
-        }
-
-        if (srcSlicePitch == 0) {
-            srcSlicePitch = srcRowPitch * region.height;
-        }
-
-        if (dstRowPitch == 0) {
-            dstRowPitch = region.width;
-        }
-
-        if (dstSlicePitch == 0) {
-            dstSlicePitch = dstRowPitch * region.height;
-        }
-
-        // Calculate the src and dst addresses that actually will be copied.
-        char *SrcOrigin = SrcHandle + srcOrigin.x + srcRowPitch * srcOrigin.y +
-                          srcSlicePitch * srcOrigin.z;
-        char *DstOrigin = DstHandle + dstOrigin.x + dstRowPitch * dstOrigin.y +
-                          dstSlicePitch * dstOrigin.z;
-
-        std::vector<ur_event_handle_t> Events;
-        Events.reserve(region.depth);
-        // For now, USM doesn't support 3D memory copy operation, so we can only
-        // loop call 2D memory copy function to implement it.
-        for (size_t i = 0; i < region.depth; i++) {
-            ur_event_handle_t NewEvent{};
-            UR_CALL(context.urDdiTable.Enqueue.pfnUSMMemcpy2D(
-                hQueue, false, DstOrigin + (i * dstSlicePitch), dstRowPitch,
-                SrcOrigin + (i * srcSlicePitch), srcRowPitch, region.width,
-                region.height, numEventsInWaitList, phEventWaitList,
-                &NewEvent));
-
-            Events.push_back(NewEvent);
-        }
-
-        UR_CALL(context.urDdiTable.Enqueue.pfnEventsWait(
-            hQueue, Events.size(), Events.data(), phEvent));
+        UR_CALL(EnqueueMemCopyRectHelper(
+            hQueue, SrcHandle, DstHandle, srcOrigin, dstOrigin, region,
+            srcRowPitch, srcSlicePitch, dstRowPitch, dstSlicePitch, false,
+            numEventsInWaitList, phEventWaitList, phEvent));
     } else {
         UR_CALL(pfnMemBufferCopyRect(
             hQueue, hBufferSrc, hBufferDst, srcOrigin, dstOrigin, region,

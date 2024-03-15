@@ -17,6 +17,56 @@
 
 namespace ur_sanitizer_layer {
 
+ur_result_t EnqueueMemCopyRectHelper(
+    ur_queue_handle_t Queue, char *pSrc, char *pDst, ur_rect_offset_t SrcOffset,
+    ur_rect_offset_t DstOffset, ur_rect_region_t Region, size_t SrcRowPitch,
+    size_t SrcSlicePitch, size_t DstRowPitch, size_t DstSlicePitch,
+    bool Blocking, uint32_t NumEventsInWaitList,
+    const ur_event_handle_t *EventWaitList, ur_event_handle_t *Event) {
+    // If user doesn't determine src/dst row pitch and slice pitch, just use
+    // region for it.
+    if (SrcRowPitch == 0) {
+        SrcRowPitch = Region.width;
+    }
+
+    if (SrcSlicePitch == 0) {
+        SrcSlicePitch = SrcRowPitch * Region.height;
+    }
+
+    if (DstRowPitch == 0) {
+        DstRowPitch = Region.width;
+    }
+
+    if (DstSlicePitch == 0) {
+        DstSlicePitch = DstRowPitch * Region.height;
+    }
+
+    // Calculate the src and dst addresses that actually will be copied.
+    char *SrcOrigin = pSrc + SrcOffset.x + SrcRowPitch * SrcOffset.y +
+                      SrcSlicePitch * SrcOffset.z;
+    char *DstOrigin = pDst + DstOffset.x + DstRowPitch * DstOffset.y +
+                      DstSlicePitch * DstOffset.z;
+
+    std::vector<ur_event_handle_t> Events;
+    Events.reserve(Region.depth);
+    // For now, USM doesn't support 3D memory copy operation, so we can only
+    // loop call 2D memory copy function to implement it.
+    for (size_t i = 0; i < Region.depth; i++) {
+        ur_event_handle_t NewEvent{};
+        UR_CALL(context.urDdiTable.Enqueue.pfnUSMMemcpy2D(
+            Queue, Blocking, SrcOrigin + (i * DstSlicePitch), DstRowPitch,
+            DstOrigin + (i * SrcSlicePitch), SrcRowPitch, Region.width,
+            Region.height, NumEventsInWaitList, EventWaitList, &NewEvent));
+
+        Events.push_back(NewEvent);
+    }
+
+    UR_CALL(context.urDdiTable.Enqueue.pfnEventsWait(Queue, Events.size(),
+                                                     Events.data(), Event));
+    
+    return UR_RESULT_SUCCESS;
+}
+
 ur_result_t MemBuffer::getHandle(ur_device_handle_t Device, char *&Handle) {
     // Sub-buffers don't maintain own allocations but rely on parent buffer.
     if (SubBuffer) {
