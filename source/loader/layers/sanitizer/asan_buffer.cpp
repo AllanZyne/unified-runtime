@@ -54,8 +54,8 @@ ur_result_t EnqueueMemCopyRectHelper(
     for (size_t i = 0; i < Region.depth; i++) {
         ur_event_handle_t NewEvent{};
         UR_CALL(context.urDdiTable.Enqueue.pfnUSMMemcpy2D(
-            Queue, Blocking, SrcOrigin + (i * DstSlicePitch), DstRowPitch,
-            DstOrigin + (i * SrcSlicePitch), SrcRowPitch, Region.width,
+            Queue, Blocking, DstOrigin + (i * DstSlicePitch), DstRowPitch,
+            SrcOrigin + (i * SrcSlicePitch), SrcRowPitch, Region.width,
             Region.height, NumEventsInWaitList, EventWaitList, &NewEvent));
 
         Events.push_back(NewEvent);
@@ -63,7 +63,7 @@ ur_result_t EnqueueMemCopyRectHelper(
 
     UR_CALL(context.urDdiTable.Enqueue.pfnEventsWait(Queue, Events.size(),
                                                      Events.data(), Event));
-    
+
     return UR_RESULT_SUCCESS;
 }
 

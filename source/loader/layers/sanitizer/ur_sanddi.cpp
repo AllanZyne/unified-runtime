@@ -1090,7 +1090,7 @@ __urdlllocal ur_result_t UR_APICALL urKernelSetArgValue(
              *ur_cast<const ur_mem_handle_t *>(pArgValue)))) {
         auto KernelInfo = context.interceptor->getKernelInfo(hKernel);
         std::scoped_lock<ur_shared_mutex> Guard(KernelInfo->Mutex);
-        KernelInfo->ArgumentsMap.emplace(argIndex, MemBuffer);
+        KernelInfo->ArgumentsMap[argIndex] = MemBuffer;
     } else {
         UR_CALL(
             pfnSetArgValue(hKernel, argIndex, argSize, pProperties, pArgValue));
@@ -1116,10 +1116,10 @@ __urdlllocal ur_result_t UR_APICALL urKernelSetArgMemObj(
 
     context.logger.debug("==== urKernelSetArgMemObj");
 
-    if (auto pMemBuffer = context.interceptor->getMemBuffer(hArgValue)) {
+    if (auto MemBuffer = context.interceptor->getMemBuffer(hArgValue)) {
         auto KernelInfo = context.interceptor->getKernelInfo(hKernel);
         std::scoped_lock<ur_shared_mutex> Guard(KernelInfo->Mutex);
-        KernelInfo->ArgumentsMap.emplace(argIndex, pMemBuffer);
+        KernelInfo->ArgumentsMap[argIndex] = MemBuffer;
     } else {
         UR_CALL(pfnSetArgMemObj(hKernel, argIndex, pProperties, hArgValue));
     }
