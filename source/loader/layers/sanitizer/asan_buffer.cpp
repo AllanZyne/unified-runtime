@@ -31,8 +31,8 @@ ur_result_t MemBuffer::getHandle(ur_device_handle_t Device, char *&Handle) {
         USMDesc.align = getAlignment();
         ur_usm_pool_handle_t Pool{};
         ur_result_t URes = context.interceptor->allocateMemory(
-            Context, Device, &USMDesc, Pool, Size, (void **)&Allocation,
-            AllocType::MEM_BUFFER);
+            Context, Device, &USMDesc, Pool, Size, AllocType::MEM_BUFFER,
+            ur_cast<void **>(&Allocation));
         if (URes != UR_RESULT_SUCCESS) {
             context.logger.error(
                 "Failed to allocate {} bytes memory for buffer {}", Size, this);
@@ -72,10 +72,14 @@ ur_result_t MemBuffer::free() {
 size_t MemBuffer::getAlignment() {
     // Choose an alignment that is at most 64 and is the next power of 2
     // for sizes less than 64.
+    // TODO: If we don't set the alignment size explicitly, the device will
+    // usually choose a very large size (more than 1k). Then sanitizer will
+    // allocate extra unnessary memory. Not sure if this will impact
+    // performance.
     size_t MsbIdx = 63 - __builtin_clz(Size);
     size_t Alignment = (1 << (MsbIdx + 1));
-    if (Alignment > 64) {
-        Alignment = 64;
+    if (Alignment > 128) {
+        Alignment = 128;
     }
     return Alignment;
 }

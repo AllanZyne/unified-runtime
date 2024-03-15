@@ -59,7 +59,7 @@ __urdlllocal ur_result_t UR_APICALL urUSMHostAlloc(
     context.logger.debug("==== urUSMHostAlloc");
 
     return context.interceptor->allocateMemory(
-        hContext, nullptr, pUSMDesc, pool, size, ppMem, AllocType::HOST_USM);
+        hContext, nullptr, pUSMDesc, pool, size, AllocType::HOST_USM, ppMem);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -84,7 +84,7 @@ __urdlllocal ur_result_t UR_APICALL urUSMDeviceAlloc(
     context.logger.debug("==== urUSMDeviceAlloc");
 
     return context.interceptor->allocateMemory(
-        hContext, hDevice, pUSMDesc, pool, size, ppMem, AllocType::DEVICE_USM);
+        hContext, hDevice, pUSMDesc, pool, size, AllocType::DEVICE_USM, ppMem);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -109,7 +109,7 @@ __urdlllocal ur_result_t UR_APICALL urUSMSharedAlloc(
     context.logger.debug("==== urUSMSharedAlloc");
 
     return context.interceptor->allocateMemory(
-        hContext, hDevice, pUSMDesc, pool, size, ppMem, AllocType::SHARED_USM);
+        hContext, hDevice, pUSMDesc, pool, size, AllocType::SHARED_USM, ppMem);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -422,7 +422,7 @@ __urdlllocal ur_result_t UR_APICALL urMemRetain(
     context.logger.debug("==== urMemRetain");
 
     if (auto MemBuffer = context.interceptor->getMemBuffer(hMem)) {
-        MemBuffer->RefCount.increment();
+        MemBuffer->RefCount++;
     } else {
         UR_CALL(pfnRetain(hMem));
     }
@@ -444,7 +444,7 @@ __urdlllocal ur_result_t UR_APICALL urMemRelease(
     context.logger.debug("==== urMemRelease");
 
     if (auto MemBuffer = context.interceptor->getMemBuffer(hMem)) {
-        if (!MemBuffer->RefCount.decrementAndTest()) {
+        if (--MemBuffer->RefCount != 0) {
             return UR_RESULT_SUCCESS;
         }
         UR_CALL(MemBuffer->free());
@@ -1069,8 +1069,8 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueMemBufferMap(
             USMDesc.align = MemBuffer->getAlignment();
             ur_usm_pool_handle_t Pool{};
             UR_CALL(context.interceptor->allocateMemory(
-                Context, Device, &USMDesc, Pool, size, ppRetMap,
-                AllocType::HOST_USM));
+                Context, nullptr, &USMDesc, Pool, size, AllocType::HOST_USM,
+                ppRetMap));
         }
 
         // Actually, if the access mode is write only, we don't need to do this
