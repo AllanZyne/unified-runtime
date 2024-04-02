@@ -83,7 +83,7 @@ struct QueueInfo {
 struct KernelInfo {
     ur_kernel_handle_t Handle;
     ur_shared_mutex Mutex;
-    std::unordered_map<int, std::shared_ptr<MemBuffer>> ArgumentsMap;
+    std::unordered_map<int, std::shared_ptr<MemBuffer>> BufferArgs;
 };
 
 struct ContextInfo {
