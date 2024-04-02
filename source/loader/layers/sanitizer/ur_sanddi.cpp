@@ -11,7 +11,6 @@
  */
 
 #include "asan_interceptor.hpp"
-#include "symbolizer_llvm.hpp"
 #include "ur_sanitizer_layer.hpp"
 #include "ur_sanitizer_utils.hpp"
 
@@ -215,24 +214,10 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueKernelLaunch(
 
     context.logger.debug("==== urEnqueueKernelLaunch");
 
-    LaunchInfo LaunchInfo(GetContext(hQueue));
-    const size_t *pUserLocalWorkSize = pLocalWorkSize;
-    if (!pUserLocalWorkSize) {
-        pUserLocalWorkSize = LaunchInfo.LocalWorkSize;
-        // FIXME: This is W/A until urKernelSuggestGroupSize is added
-        LaunchInfo.LocalWorkSize[0] = 1;
-        LaunchInfo.LocalWorkSize[1] = 1;
-        LaunchInfo.LocalWorkSize[2] = 1;
-    }
+    LaunchInfo LaunchInfo(GetContext(hQueue), pGlobalWorkSize, pLocalWorkSize,
+                          pGlobalWorkOffset, workDim);
 
-    uint32_t numWork = 1;
-    for (uint32_t dim = 0; dim < workDim; ++dim) {
-        numWork *= (pGlobalWorkSize[dim] + pUserLocalWorkSize[dim] - 1) /
-                   pUserLocalWorkSize[dim];
-    }
-
-    UR_CALL(context.interceptor->preLaunchKernel(hKernel, hQueue, LaunchInfo,
-                                                 numWork));
+    UR_CALL(context.interceptor->preLaunchKernel(hKernel, hQueue, LaunchInfo));
 
     ur_event_handle_t hEvent{};
     ur_result_t result = pfnKernelLaunch(
@@ -240,8 +225,8 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueKernelLaunch(
         pLocalWorkSize, numEventsInWaitList, phEventWaitList, &hEvent);
 
     if (result == UR_RESULT_SUCCESS) {
-        context.interceptor->postLaunchKernel(hKernel, hQueue, hEvent,
-                                              LaunchInfo);
+        UR_CALL(context.interceptor->postLaunchKernel(hKernel, hQueue, hEvent,
+                                                      LaunchInfo));
     }
 
     if (phEvent) {
@@ -1427,8 +1412,6 @@ ur_result_t context_t::init(ur_dditable_t *dditable,
         result = ur_sanitizer_layer::urGetUSMProcAddrTable(
             UR_API_VERSION_CURRENT, &dditable->USM);
     }
-
-    InitSymbolizers();
 
     return result;
 }

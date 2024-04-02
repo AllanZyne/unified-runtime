@@ -16,10 +16,10 @@
 namespace ur_sanitizer_layer {
 
 void AllocInfo::print() {
-    context.logger.info(
-        "AllocInfo(Alloc=[{}-{}),  User=[{}-{}), AllocSize={}, Type={})",
-        (void *)AllocBegin, (void *)(AllocBegin + AllocSize - 1),
-        (void *)UserBegin, (void *)(UserEnd - 1), AllocSize, ToString(Type));
+  context.logger.info(
+      "AllocInfo(Alloc=[{}-{}),  User=[{}-{}), AllocSize={}, Type={})",
+      (void *)AllocBegin, (void *)(AllocBegin + AllocSize - 1),
+      (void *)UserBegin, (void *)(UserEnd - 1), AllocSize, ToString(Type));
 }
 
 } // namespace ur_sanitizer_layer

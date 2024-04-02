@@ -28,9 +28,6 @@ using uptr = uintptr_t;
 using u8 = unsigned char;
 using u32 = unsigned int;
 
-constexpr unsigned ASAN_SHADOW_SCALE = 3;
-constexpr unsigned ASAN_SHADOW_GRANULARITY = 1ULL << ASAN_SHADOW_SCALE;
-
 inline constexpr bool IsPowerOfTwo(uptr x) {
     return (x & (x - 1)) == 0 && x != 0;
 }
@@ -82,11 +79,7 @@ inline constexpr uptr ComputeRZLog(uptr user_requested_size) {
             return Result;                                                     \
     }
 
-struct BacktraceInfo {
-    uptr offset;
-    std::string module;
-    std::string debug;
-};
+using BacktraceInfo = std::string;
 
 struct SourceInfo {
     std::string file;
@@ -106,7 +99,5 @@ bool Munmap(uptr Addr, uptr Size);
 void *GetMemFunctionPointer(const char *);
 
 std::string DemangleName(const std::string &name);
-
-std::string RunCommand(const char *cmd);
 
 } // namespace ur_sanitizer_layer
