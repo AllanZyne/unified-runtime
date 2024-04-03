@@ -214,8 +214,10 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueKernelLaunch(
 
     context.logger.debug("==== urEnqueueKernelLaunch");
 
-    LaunchInfo LaunchInfo(GetContext(hQueue), pGlobalWorkSize, pLocalWorkSize,
-                          pGlobalWorkOffset, workDim);
+    USMLaunchInfo LaunchInfo(GetContext(hQueue), GetDevice(hQueue),
+                             pGlobalWorkSize, pLocalWorkSize, pGlobalWorkOffset,
+                             workDim);
+    UR_CALL(LaunchInfo.initialize());
 
     UR_CALL(context.interceptor->preLaunchKernel(hKernel, hQueue, LaunchInfo));
 
@@ -1075,7 +1077,7 @@ __urdlllocal ur_result_t UR_APICALL urKernelSetArgValue(
              *ur_cast<const ur_mem_handle_t *>(pArgValue)))) {
         auto KernelInfo = context.interceptor->getKernelInfo(hKernel);
         std::scoped_lock<ur_shared_mutex> Guard(KernelInfo->Mutex);
-        KernelInfo->ArgumentsMap[argIndex] = MemBuffer;
+        KernelInfo->BufferArgs[argIndex] = MemBuffer;
     } else {
         UR_CALL(
             pfnSetArgValue(hKernel, argIndex, argSize, pProperties, pArgValue));
@@ -1104,12 +1106,47 @@ __urdlllocal ur_result_t UR_APICALL urKernelSetArgMemObj(
     if (auto MemBuffer = context.interceptor->getMemBuffer(hArgValue)) {
         auto KernelInfo = context.interceptor->getKernelInfo(hKernel);
         std::scoped_lock<ur_shared_mutex> Guard(KernelInfo->Mutex);
-        KernelInfo->ArgumentsMap[argIndex] = MemBuffer;
+        KernelInfo->BufferArgs[argIndex] = MemBuffer;
     } else {
         UR_CALL(pfnSetArgMemObj(hKernel, argIndex, pProperties, hArgValue));
     }
 
     return UR_RESULT_SUCCESS;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Intercept function for urKernelSetArgLocal
+__urdlllocal ur_result_t UR_APICALL urKernelSetArgLocal(
+    ur_kernel_handle_t hKernel, ///< [in] handle of the kernel object
+    uint32_t argIndex, ///< [in] argument index in range [0, num args - 1]
+    size_t
+        argSize, ///< [in] size of the local buffer to be allocated by the runtime
+    const ur_kernel_arg_local_properties_t
+        *pProperties ///< [in][optional] pointer to local buffer properties.
+) {
+    auto pfnSetArgLocal = context.urDdiTable.Kernel.pfnSetArgLocal;
+
+    if (nullptr == pfnSetArgLocal) {
+        return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
+    }
+
+    context.logger.debug("==== urKernelSetArgLocal (argIndex={}, argSize={})",
+                         argIndex, argSize);
+
+    {
+        auto KI = context.interceptor->getKernelInfo(hKernel);
+        std::scoped_lock<ur_shared_mutex> Guard(KI->Mutex);
+        // TODO: get local variable alignment
+        auto argSizeWithRZ = GetSizeAndRedzoneSizeForLocal(
+            argSize, ASAN_SHADOW_GRANULARITY, ASAN_SHADOW_GRANULARITY);
+        KI->LocalArgs[argIndex] = LocalArgsInfo{argSize, argSizeWithRZ};
+        argSize = argSizeWithRZ;
+    }
+
+    ur_result_t result =
+        pfnSetArgLocal(hKernel, argIndex, argSize, pProperties);
+
+    return result;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1203,6 +1240,7 @@ __urdlllocal ur_result_t UR_APICALL urGetKernelProcAddrTable(
     pDdiTable->pfnCreate = ur_sanitizer_layer::urKernelCreate;
     pDdiTable->pfnSetArgValue = ur_sanitizer_layer::urKernelSetArgValue;
     pDdiTable->pfnSetArgMemObj = ur_sanitizer_layer::urKernelSetArgMemObj;
+    pDdiTable->pfnSetArgLocal = ur_sanitizer_layer::urKernelSetArgLocal;
 
     return result;
 }
