@@ -194,20 +194,11 @@ class SanitizerInterceptor {
     ur_result_t eraseDevice(ur_device_handle_t Device);
 
     ur_result_t insertKernel(ur_kernel_handle_t Kernel);
-
     ur_result_t eraseKernel(ur_kernel_handle_t Kernel);
 
     ur_result_t insertMemBuffer(std::shared_ptr<MemBuffer> MemBuffer);
-
     ur_result_t eraseMemBuffer(ur_mem_handle_t MemHandle);
-
     std::shared_ptr<MemBuffer> getMemBuffer(ur_mem_handle_t MemHandle);
-
-    std::shared_ptr<KernelInfo> getKernelInfo(ur_kernel_handle_t Kernel) {
-        std::shared_lock<ur_shared_mutex> Guard(m_KernelMapMutex);
-        assert(m_KernelMap.find(Kernel) != m_KernelMap.end());
-        return m_KernelMap[Kernel];
-    }
 
     std::optional<AllocationIterator> findAllocInfoByAddress(uptr Address);
 
@@ -221,6 +212,12 @@ class SanitizerInterceptor {
         std::shared_lock<ur_shared_mutex> Guard(m_DeviceMapMutex);
         assert(m_DeviceMap.find(Device) != m_DeviceMap.end());
         return m_DeviceMap[Device];
+    }
+
+    std::shared_ptr<KernelInfo> getKernelInfo(ur_kernel_handle_t Kernel) {
+        std::shared_lock<ur_shared_mutex> Guard(m_KernelMapMutex);
+        assert(m_KernelMap.find(Kernel) != m_KernelMap.end());
+        return m_KernelMap[Kernel];
     }
 
   private:
