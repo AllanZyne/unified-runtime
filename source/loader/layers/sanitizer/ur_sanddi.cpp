@@ -337,8 +337,13 @@ __urdlllocal ur_result_t UR_APICALL urMemBufferCreate(
 
     context.logger.debug("==== urMemBufferCreate");
 
+    void *Host = nullptr;
+    if (pProperties) {
+        Host = pProperties->pHost;
+    }
+
     char *hostPtrOrNull = (flags & UR_MEM_FLAG_USE_HOST_POINTER)
-                              ? ur_cast<char *>(pProperties->pHost)
+                              ? ur_cast<char *>(Host)
                               : nullptr;
 
     std::shared_ptr<MemBuffer> pMemBuffer =
@@ -384,7 +389,7 @@ __urdlllocal ur_result_t UR_APICALL urMemGetInfo(
             return ReturnValue(size_t{MemBuffer->Size});
         }
         default: {
-            die("urMemGetInfo: Parameter is not implemented");
+            return UR_RESULT_ERROR_UNSUPPORTED_ENUMERATION;
         }
         }
     } else {
@@ -464,6 +469,9 @@ __urdlllocal ur_result_t UR_APICALL urMemBufferPartition(
     context.logger.debug("==== urMemBufferPartition");
 
     if (auto ParentBuffer = context.interceptor->getMemBuffer(hBuffer)) {
+        if (ParentBuffer->Size < (pRegion->origin + pRegion->size)) {
+            return UR_RESULT_ERROR_INVALID_BUFFER_SIZE;
+        }
         std::shared_ptr<MemBuffer> SubBuffer = std::make_shared<MemBuffer>(
             ParentBuffer, pRegion->origin, pRegion->size);
         UR_CALL(context.interceptor->insertMemBuffer(SubBuffer));
@@ -1053,6 +1061,33 @@ __urdlllocal ur_result_t UR_APICALL urKernelCreate(
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+/// @brief Intercept function for urKernelRelease
+__urdlllocal ur_result_t urKernelRelease(
+    ur_kernel_handle_t hKernel ///< [in] handle for the Kernel to release
+) {
+    auto pfnRelease = context.urDdiTable.Kernel.pfnRelease;
+
+    if (nullptr == pfnRelease) {
+        return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
+    }
+
+    context.logger.debug("==== urKernelRelease");
+    UR_CALL(pfnRelease(hKernel));
+
+    if (auto KernelInfo = context.interceptor->getKernelInfo(hKernel)) {
+        uint32_t RefCount;
+        UR_CALL(context.urDdiTable.Kernel.pfnGetInfo(
+            hKernel, UR_KERNEL_INFO_REFERENCE_COUNT, sizeof(RefCount),
+            &RefCount, nullptr));
+        if (RefCount == 1) {
+            UR_CALL(context.interceptor->eraseKernel(hKernel));
+        }
+    }
+
+    return UR_RESULT_SUCCESS;
+}
+
+///////////////////////////////////////////////////////////////////////////////
 /// @brief Intercept function for urKernelSetArgValue
 __urdlllocal ur_result_t UR_APICALL urKernelSetArgValue(
     ur_kernel_handle_t hKernel, ///< [in] handle of the kernel object
@@ -1238,6 +1273,7 @@ __urdlllocal ur_result_t UR_APICALL urGetKernelProcAddrTable(
     ur_result_t result = UR_RESULT_SUCCESS;
 
     pDdiTable->pfnCreate = ur_sanitizer_layer::urKernelCreate;
+    pDdiTable->pfnRelease = ur_sanitizer_layer::urKernelRelease;
     pDdiTable->pfnSetArgValue = ur_sanitizer_layer::urKernelSetArgValue;
     pDdiTable->pfnSetArgMemObj = ur_sanitizer_layer::urKernelSetArgMemObj;
     pDdiTable->pfnSetArgLocal = ur_sanitizer_layer::urKernelSetArgLocal;
@@ -1334,7 +1370,6 @@ __urdlllocal ur_result_t UR_APICALL urGetEnqueueProcAddrTable(
 
     ur_result_t result = UR_RESULT_SUCCESS;
 
-    pDdiTable->pfnKernelLaunch = ur_sanitizer_layer::urEnqueueKernelLaunch;
     pDdiTable->pfnMemBufferRead = ur_sanitizer_layer::urEnqueueMemBufferRead;
     pDdiTable->pfnMemBufferWrite = ur_sanitizer_layer::urEnqueueMemBufferWrite;
     pDdiTable->pfnMemBufferReadRect =

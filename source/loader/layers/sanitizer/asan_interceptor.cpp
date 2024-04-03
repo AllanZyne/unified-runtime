@@ -624,7 +624,14 @@ ur_result_t SanitizerInterceptor::insertKernel(ur_kernel_handle_t Kernel) {
     if (m_KernelMap.find(Kernel) != m_KernelMap.end()) {
         return UR_RESULT_SUCCESS;
     }
-    m_KernelMap.emplace(Kernel, std::make_shared<KernelInfo>());
+    m_KernelMap.emplace(Kernel, std::make_shared<KernelInfo>(Kernel));
+    return UR_RESULT_SUCCESS;
+}
+
+ur_result_t SanitizerInterceptor::eraseKernel(ur_kernel_handle_t Kernel) {
+    std::scoped_lock<ur_shared_mutex> Guard(m_KernelMapMutex);
+    assert(m_KernelMap.find(Kernel) != m_KernelMap.end());
+    m_KernelMap.erase(Kernel);
     return UR_RESULT_SUCCESS;
 }
 

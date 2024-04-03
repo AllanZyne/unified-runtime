@@ -86,6 +86,18 @@ struct KernelInfo {
     std::unordered_map<uint32_t, std::shared_ptr<MemBuffer>> BufferArgs;
     // Need preserve the order of local arguments
     std::map<uint32_t, LocalArgsInfo> LocalArgs;
+
+    explicit KernelInfo(ur_kernel_handle_t Kernel) : Handle(Kernel) {
+        [[maybe_unused]] auto Result =
+            context.urDdiTable.Kernel.pfnRetain(Kernel);
+        assert(Result == UR_RESULT_SUCCESS);
+    }
+
+    ~KernelInfo() {
+        [[maybe_unused]] auto Result =
+            context.urDdiTable.Kernel.pfnRelease(Handle);
+        assert(Result == UR_RESULT_SUCCESS);
+    }
 };
 
 struct ContextInfo {
@@ -182,6 +194,8 @@ class SanitizerInterceptor {
     ur_result_t eraseDevice(ur_device_handle_t Device);
 
     ur_result_t insertKernel(ur_kernel_handle_t Kernel);
+
+    ur_result_t eraseKernel(ur_kernel_handle_t Kernel);
 
     ur_result_t insertMemBuffer(std::shared_ptr<MemBuffer> MemBuffer);
 
