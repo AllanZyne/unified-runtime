@@ -335,6 +335,10 @@ __urdlllocal ur_result_t UR_APICALL urMemBufferCreate(
         return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
     }
 
+    if (nullptr == phBuffer) {
+        return UR_RESULT_ERROR_INVALID_NULL_POINTER;
+    }
+
     context.logger.debug("==== urMemBufferCreate");
 
     void *Host = nullptr;
