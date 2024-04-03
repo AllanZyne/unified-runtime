@@ -246,9 +246,11 @@ class SanitizerInterceptor {
     std::unordered_map<ur_device_handle_t, std::shared_ptr<DeviceInfo>>
         m_DeviceMap;
     ur_shared_mutex m_DeviceMapMutex;
+
     std::unordered_map<ur_kernel_handle_t, std::shared_ptr<KernelInfo>>
         m_KernelMap;
     ur_shared_mutex m_KernelMapMutex;
+
     std::unordered_map<ur_mem_handle_t, std::shared_ptr<MemBuffer>>
         m_MemBufferMap;
     ur_shared_mutex m_MemBufferMapMutex;
