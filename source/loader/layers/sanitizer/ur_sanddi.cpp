@@ -225,6 +225,7 @@ __urdlllocal ur_result_t UR_APICALL urEnqueueKernelLaunch(
     ur_result_t result = pfnKernelLaunch(
         hQueue, hKernel, workDim, pGlobalWorkOffset, pGlobalWorkSize,
         pLocalWorkSize, numEventsInWaitList, phEventWaitList, &hEvent);
+    context.logger.debug("pfnKernelLaunch: {}", result);
 
     if (result == UR_RESULT_SUCCESS) {
         UR_CALL(context.interceptor->postLaunchKernel(hKernel, hQueue, hEvent,

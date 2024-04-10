@@ -355,7 +355,8 @@ ur_result_t SanitizerInterceptor::preLaunchKernel(ur_kernel_handle_t Kernel,
     auto ContextInfo = getContextInfo(Context);
     auto DeviceInfo = getDeviceInfo(Device);
     auto KernelInfo = getKernelInfo(Kernel);
-    LaunchInfo.updateKernelInfo(*KernelInfo.get());
+
+    UR_CALL(LaunchInfo.updateKernelInfo(*KernelInfo.get()));
 
     ManagedQueue InternalQueue(Context, Device);
     if (!InternalQueue) {
@@ -829,15 +830,18 @@ ur_result_t USMLaunchInfo::initialize() {
 
 ur_result_t USMLaunchInfo::updateKernelInfo(const KernelInfo &KI) {
     auto NumArgs = KI.LocalArgs.size();
-    Data->NumLocalArgs = NumArgs;
-    UR_CALL(context.urDdiTable.USM.pfnSharedAlloc(
-        Context, Device, nullptr, nullptr, sizeof(LocalArgsInfo) * NumArgs,
-        (void **)&Data->LocalArgs));
-    uint32_t i = 0;
-    for (auto [ArgIndex, ArgInfo] : KI.LocalArgs) {
-        Data->LocalArgs[i++] = ArgInfo;
-        context.logger.debug("local_args (argIndex={}, size={}, sizeWithRZ={})",
-                             ArgIndex, ArgInfo.Size, ArgInfo.SizeWithRedZone);
+    if (NumArgs) {
+        Data->NumLocalArgs = NumArgs;
+        UR_CALL(context.urDdiTable.USM.pfnSharedAlloc(
+            Context, Device, nullptr, nullptr, sizeof(LocalArgsInfo) * NumArgs,
+            (void **)&Data->LocalArgs));
+        uint32_t i = 0;
+        for (auto [ArgIndex, ArgInfo] : KI.LocalArgs) {
+            Data->LocalArgs[i++] = ArgInfo;
+            context.logger.debug(
+                "local_args (argIndex={}, size={}, sizeWithRZ={})", ArgIndex,
+                ArgInfo.Size, ArgInfo.SizeWithRedZone);
+        }
     }
     return UR_RESULT_SUCCESS;
 }
