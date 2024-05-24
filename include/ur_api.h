@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
  *
  * @file ur_api.h
- * @version v0.9-r0
+ * @version v0.10-r0
  *
  */
 #ifndef UR_API_H_INCLUDED
@@ -196,7 +196,6 @@ typedef enum ur_function_t {
     UR_FUNCTION_ADAPTER_RETAIN = 179,                                          ///< Enumerator for ::urAdapterRetain
     UR_FUNCTION_ADAPTER_GET_LAST_ERROR = 180,                                  ///< Enumerator for ::urAdapterGetLastError
     UR_FUNCTION_ADAPTER_GET_INFO = 181,                                        ///< Enumerator for ::urAdapterGetInfo
-    UR_FUNCTION_COMMAND_BUFFER_UPDATE_KERNEL_LAUNCH_EXP = 182,                 ///< Enumerator for ::urCommandBufferUpdateKernelLaunchExp
     UR_FUNCTION_PROGRAM_BUILD_EXP = 197,                                       ///< Enumerator for ::urProgramBuildExp
     UR_FUNCTION_PROGRAM_COMPILE_EXP = 198,                                     ///< Enumerator for ::urProgramCompileExp
     UR_FUNCTION_PROGRAM_LINK_EXP = 199,                                        ///< Enumerator for ::urProgramLinkExp
@@ -216,11 +215,14 @@ typedef enum ur_function_t {
     UR_FUNCTION_COMMAND_BUFFER_APPEND_USM_ADVISE_EXP = 213,                    ///< Enumerator for ::urCommandBufferAppendUSMAdviseExp
     UR_FUNCTION_ENQUEUE_COOPERATIVE_KERNEL_LAUNCH_EXP = 214,                   ///< Enumerator for ::urEnqueueCooperativeKernelLaunchExp
     UR_FUNCTION_KERNEL_SUGGEST_MAX_COOPERATIVE_GROUP_COUNT_EXP = 215,          ///< Enumerator for ::urKernelSuggestMaxCooperativeGroupCountExp
-    UR_FUNCTION_COMMAND_BUFFER_RETAIN_COMMAND_EXP = 216,                       ///< Enumerator for ::urCommandBufferRetainCommandExp
-    UR_FUNCTION_COMMAND_BUFFER_RELEASE_COMMAND_EXP = 217,                      ///< Enumerator for ::urCommandBufferReleaseCommandExp
-    UR_FUNCTION_COMMAND_BUFFER_GET_INFO_EXP = 218,                             ///< Enumerator for ::urCommandBufferGetInfoExp
-    UR_FUNCTION_COMMAND_BUFFER_COMMAND_GET_INFO_EXP = 219,                     ///< Enumerator for ::urCommandBufferCommandGetInfoExp
-    UR_FUNCTION_DEVICE_GET_SELECTED = 220,                                     ///< Enumerator for ::urDeviceGetSelected
+    UR_FUNCTION_PROGRAM_GET_GLOBAL_VARIABLE_POINTER = 216,                     ///< Enumerator for ::urProgramGetGlobalVariablePointer
+    UR_FUNCTION_DEVICE_GET_SELECTED = 217,                                     ///< Enumerator for ::urDeviceGetSelected
+    UR_FUNCTION_COMMAND_BUFFER_RETAIN_COMMAND_EXP = 218,                       ///< Enumerator for ::urCommandBufferRetainCommandExp
+    UR_FUNCTION_COMMAND_BUFFER_RELEASE_COMMAND_EXP = 219,                      ///< Enumerator for ::urCommandBufferReleaseCommandExp
+    UR_FUNCTION_COMMAND_BUFFER_UPDATE_KERNEL_LAUNCH_EXP = 220,                 ///< Enumerator for ::urCommandBufferUpdateKernelLaunchExp
+    UR_FUNCTION_COMMAND_BUFFER_GET_INFO_EXP = 221,                             ///< Enumerator for ::urCommandBufferGetInfoExp
+    UR_FUNCTION_COMMAND_BUFFER_COMMAND_GET_INFO_EXP = 222,                     ///< Enumerator for ::urCommandBufferCommandGetInfoExp
+    UR_FUNCTION_ENQUEUE_TIMESTAMP_RECORDING_EXP = 223,                         ///< Enumerator for ::urEnqueueTimestampRecordingExp
     /// @cond
     UR_FUNCTION_FORCE_UINT32 = 0x7fffffff
     /// @endcond
@@ -270,13 +272,13 @@ typedef enum ur_structure_type_t {
     UR_STRUCTURE_TYPE_EXP_COMMAND_BUFFER_UPDATE_MEMOBJ_ARG_DESC = 0x1002,    ///< ::ur_exp_command_buffer_update_memobj_arg_desc_t
     UR_STRUCTURE_TYPE_EXP_COMMAND_BUFFER_UPDATE_POINTER_ARG_DESC = 0x1003,   ///< ::ur_exp_command_buffer_update_pointer_arg_desc_t
     UR_STRUCTURE_TYPE_EXP_COMMAND_BUFFER_UPDATE_VALUE_ARG_DESC = 0x1004,     ///< ::ur_exp_command_buffer_update_value_arg_desc_t
-    UR_STRUCTURE_TYPE_EXP_COMMAND_BUFFER_UPDATE_EXEC_INFO_DESC = 0x1005,     ///< ::ur_exp_command_buffer_update_exec_info_desc_t
     UR_STRUCTURE_TYPE_EXP_SAMPLER_MIP_PROPERTIES = 0x2000,                   ///< ::ur_exp_sampler_mip_properties_t
     UR_STRUCTURE_TYPE_EXP_INTEROP_MEM_DESC = 0x2001,                         ///< ::ur_exp_interop_mem_desc_t
     UR_STRUCTURE_TYPE_EXP_INTEROP_SEMAPHORE_DESC = 0x2002,                   ///< ::ur_exp_interop_semaphore_desc_t
     UR_STRUCTURE_TYPE_EXP_FILE_DESCRIPTOR = 0x2003,                          ///< ::ur_exp_file_descriptor_t
     UR_STRUCTURE_TYPE_EXP_WIN32_HANDLE = 0x2004,                             ///< ::ur_exp_win32_handle_t
     UR_STRUCTURE_TYPE_EXP_SAMPLER_ADDR_MODES = 0x2005,                       ///< ::ur_exp_sampler_addr_modes_t
+    UR_STRUCTURE_TYPE_EXP_SAMPLER_CUBEMAP_PROPERTIES = 0x2006,               ///< ::ur_exp_sampler_cubemap_properties_t
     /// @cond
     UR_STRUCTURE_TYPE_FORCE_UINT32 = 0x7fffffff
     /// @endcond
@@ -491,6 +493,8 @@ typedef enum ur_result_t {
     UR_RESULT_ERROR_ADAPTER_SPECIFIC = 67,                                    ///< An adapter specific warning/error has been reported and can be
                                                                               ///< retrieved via the urPlatformGetLastError entry point.
     UR_RESULT_ERROR_LAYER_NOT_PRESENT = 68,                                   ///< A requested layer was not found by the loader.
+    UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS = 69,                           ///< An event in the provided wait list has ::UR_EVENT_STATUS_ERROR.
+    UR_RESULT_ERROR_DEVICE_NOT_AVAILABLE = 70,                                ///< Device in question has `::UR_DEVICE_INFO_AVAILABLE == false`
     UR_RESULT_ERROR_INVALID_COMMAND_BUFFER_EXP = 0x1000,                      ///< Invalid Command-Buffer
     UR_RESULT_ERROR_INVALID_COMMAND_BUFFER_SYNC_POINT_EXP = 0x1001,           ///< Sync point is not valid for the command-buffer
     UR_RESULT_ERROR_INVALID_COMMAND_BUFFER_SYNC_POINT_WAIT_LIST_EXP = 0x1002, ///< Sync point wait list is invalid
@@ -1094,11 +1098,12 @@ urPlatformGetInfo(
 ///     - API versions contain major and minor attributes, use
 ///       ::UR_MAJOR_VERSION and ::UR_MINOR_VERSION
 typedef enum ur_api_version_t {
-    UR_API_VERSION_0_6 = UR_MAKE_VERSION(0, 6),     ///< version 0.6
-    UR_API_VERSION_0_7 = UR_MAKE_VERSION(0, 7),     ///< version 0.7
-    UR_API_VERSION_0_8 = UR_MAKE_VERSION(0, 8),     ///< version 0.8
-    UR_API_VERSION_0_9 = UR_MAKE_VERSION(0, 9),     ///< version 0.9
-    UR_API_VERSION_CURRENT = UR_MAKE_VERSION(0, 9), ///< latest known version
+    UR_API_VERSION_0_6 = UR_MAKE_VERSION(0, 6),      ///< version 0.6
+    UR_API_VERSION_0_7 = UR_MAKE_VERSION(0, 7),      ///< version 0.7
+    UR_API_VERSION_0_8 = UR_MAKE_VERSION(0, 8),      ///< version 0.8
+    UR_API_VERSION_0_9 = UR_MAKE_VERSION(0, 9),      ///< version 0.9
+    UR_API_VERSION_0_10 = UR_MAKE_VERSION(0, 10),    ///< version 0.10
+    UR_API_VERSION_CURRENT = UR_MAKE_VERSION(0, 10), ///< latest known version
     /// @cond
     UR_API_VERSION_FORCE_UINT32 = 0x7fffffff
     /// @endcond
@@ -1431,197 +1436,214 @@ urDeviceGetSelected(
 ///////////////////////////////////////////////////////////////////////////////
 /// @brief Supported device info
 typedef enum ur_device_info_t {
-    UR_DEVICE_INFO_TYPE = 0,                                        ///< [::ur_device_type_t] type of the device
-    UR_DEVICE_INFO_VENDOR_ID = 1,                                   ///< [uint32_t] vendor Id of the device
-    UR_DEVICE_INFO_DEVICE_ID = 2,                                   ///< [uint32_t] Id of the device
-    UR_DEVICE_INFO_MAX_COMPUTE_UNITS = 3,                           ///< [uint32_t] the number of compute units
-    UR_DEVICE_INFO_MAX_WORK_ITEM_DIMENSIONS = 4,                    ///< [uint32_t] max work item dimensions
-    UR_DEVICE_INFO_MAX_WORK_ITEM_SIZES = 5,                         ///< [size_t[]] return an array of max work item sizes
-    UR_DEVICE_INFO_MAX_WORK_GROUP_SIZE = 6,                         ///< [size_t] max work group size
-    UR_DEVICE_INFO_SINGLE_FP_CONFIG = 7,                            ///< [::ur_device_fp_capability_flags_t] single precision floating point
-                                                                    ///< capability
-    UR_DEVICE_INFO_HALF_FP_CONFIG = 8,                              ///< [::ur_device_fp_capability_flags_t] half precision floating point
-                                                                    ///< capability
-    UR_DEVICE_INFO_DOUBLE_FP_CONFIG = 9,                            ///< [::ur_device_fp_capability_flags_t] double precision floating point
-                                                                    ///< capability
-    UR_DEVICE_INFO_QUEUE_PROPERTIES = 10,                           ///< [::ur_queue_flags_t] command queue properties supported by the device
-    UR_DEVICE_INFO_PREFERRED_VECTOR_WIDTH_CHAR = 11,                ///< [uint32_t] preferred vector width for char
-    UR_DEVICE_INFO_PREFERRED_VECTOR_WIDTH_SHORT = 12,               ///< [uint32_t] preferred vector width for short
-    UR_DEVICE_INFO_PREFERRED_VECTOR_WIDTH_INT = 13,                 ///< [uint32_t] preferred vector width for int
-    UR_DEVICE_INFO_PREFERRED_VECTOR_WIDTH_LONG = 14,                ///< [uint32_t] preferred vector width for long
-    UR_DEVICE_INFO_PREFERRED_VECTOR_WIDTH_FLOAT = 15,               ///< [uint32_t] preferred vector width for float
-    UR_DEVICE_INFO_PREFERRED_VECTOR_WIDTH_DOUBLE = 16,              ///< [uint32_t] preferred vector width for double
-    UR_DEVICE_INFO_PREFERRED_VECTOR_WIDTH_HALF = 17,                ///< [uint32_t] preferred vector width for half float
-    UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_CHAR = 18,                   ///< [uint32_t] native vector width for char
-    UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_SHORT = 19,                  ///< [uint32_t] native vector width for short
-    UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_INT = 20,                    ///< [uint32_t] native vector width for int
-    UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_LONG = 21,                   ///< [uint32_t] native vector width for long
-    UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_FLOAT = 22,                  ///< [uint32_t] native vector width for float
-    UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_DOUBLE = 23,                 ///< [uint32_t] native vector width for double
-    UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_HALF = 24,                   ///< [uint32_t] native vector width for half float
-    UR_DEVICE_INFO_MAX_CLOCK_FREQUENCY = 25,                        ///< [uint32_t] max clock frequency in MHz
-    UR_DEVICE_INFO_MEMORY_CLOCK_RATE = 26,                          ///< [uint32_t] memory clock frequency in MHz
-    UR_DEVICE_INFO_ADDRESS_BITS = 27,                               ///< [uint32_t] address bits
-    UR_DEVICE_INFO_MAX_MEM_ALLOC_SIZE = 28,                         ///< [uint64_t] max memory allocation size
-    UR_DEVICE_INFO_IMAGE_SUPPORTED = 29,                            ///< [::ur_bool_t] images are supported
-    UR_DEVICE_INFO_MAX_READ_IMAGE_ARGS = 30,                        ///< [uint32_t] max number of image objects arguments of a kernel declared
-                                                                    ///< with the read_only qualifier
-    UR_DEVICE_INFO_MAX_WRITE_IMAGE_ARGS = 31,                       ///< [uint32_t] max number of image objects arguments of a kernel declared
-                                                                    ///< with the write_only qualifier
-    UR_DEVICE_INFO_MAX_READ_WRITE_IMAGE_ARGS = 32,                  ///< [uint32_t] max number of image objects arguments of a kernel declared
-                                                                    ///< with the read_write qualifier
-    UR_DEVICE_INFO_IMAGE2D_MAX_WIDTH = 33,                          ///< [size_t] max width of Image2D object
-    UR_DEVICE_INFO_IMAGE2D_MAX_HEIGHT = 34,                         ///< [size_t] max height of Image2D object
-    UR_DEVICE_INFO_IMAGE3D_MAX_WIDTH = 35,                          ///< [size_t] max width of Image3D object
-    UR_DEVICE_INFO_IMAGE3D_MAX_HEIGHT = 36,                         ///< [size_t] max height of Image3D object
-    UR_DEVICE_INFO_IMAGE3D_MAX_DEPTH = 37,                          ///< [size_t] max depth of Image3D object
-    UR_DEVICE_INFO_IMAGE_MAX_BUFFER_SIZE = 38,                      ///< [size_t] max image buffer size
-    UR_DEVICE_INFO_IMAGE_MAX_ARRAY_SIZE = 39,                       ///< [size_t] max image array size
-    UR_DEVICE_INFO_MAX_SAMPLERS = 40,                               ///< [uint32_t] max number of samplers that can be used in a kernel
-    UR_DEVICE_INFO_MAX_PARAMETER_SIZE = 41,                         ///< [size_t] max size in bytes of all arguments passed to a kernel
-    UR_DEVICE_INFO_MEM_BASE_ADDR_ALIGN = 42,                        ///< [uint32_t] memory base address alignment
-    UR_DEVICE_INFO_GLOBAL_MEM_CACHE_TYPE = 43,                      ///< [::ur_device_mem_cache_type_t] global memory cache type
-    UR_DEVICE_INFO_GLOBAL_MEM_CACHELINE_SIZE = 44,                  ///< [uint32_t] global memory cache line size in bytes
-    UR_DEVICE_INFO_GLOBAL_MEM_CACHE_SIZE = 45,                      ///< [uint64_t] size of global memory cache in bytes
-    UR_DEVICE_INFO_GLOBAL_MEM_SIZE = 46,                            ///< [uint64_t] size of global memory in bytes
-    UR_DEVICE_INFO_GLOBAL_MEM_FREE = 47,                            ///< [uint64_t] size of global memory which is free in bytes
-    UR_DEVICE_INFO_MAX_CONSTANT_BUFFER_SIZE = 48,                   ///< [uint64_t] max constant buffer size in bytes
-    UR_DEVICE_INFO_MAX_CONSTANT_ARGS = 49,                          ///< [uint32_t] max number of __const declared arguments in a kernel
-    UR_DEVICE_INFO_LOCAL_MEM_TYPE = 50,                             ///< [::ur_device_local_mem_type_t] local memory type
-    UR_DEVICE_INFO_LOCAL_MEM_SIZE = 51,                             ///< [uint64_t] local memory size in bytes
-    UR_DEVICE_INFO_ERROR_CORRECTION_SUPPORT = 52,                   ///< [::ur_bool_t] support error correction to global and local memory
-    UR_DEVICE_INFO_HOST_UNIFIED_MEMORY = 53,                        ///< [::ur_bool_t] unified host device memory
-    UR_DEVICE_INFO_PROFILING_TIMER_RESOLUTION = 54,                 ///< [size_t] profiling timer resolution in nanoseconds
-    UR_DEVICE_INFO_ENDIAN_LITTLE = 55,                              ///< [::ur_bool_t] little endian byte order
-    UR_DEVICE_INFO_AVAILABLE = 56,                                  ///< [::ur_bool_t] device is available
-    UR_DEVICE_INFO_COMPILER_AVAILABLE = 57,                         ///< [::ur_bool_t] device compiler is available
-    UR_DEVICE_INFO_LINKER_AVAILABLE = 58,                           ///< [::ur_bool_t] device linker is available
-    UR_DEVICE_INFO_EXECUTION_CAPABILITIES = 59,                     ///< [::ur_device_exec_capability_flags_t] device kernel execution
-                                                                    ///< capability bit-field
-    UR_DEVICE_INFO_QUEUE_ON_DEVICE_PROPERTIES = 60,                 ///< [::ur_queue_flags_t] device command queue property bit-field
-    UR_DEVICE_INFO_QUEUE_ON_HOST_PROPERTIES = 61,                   ///< [::ur_queue_flags_t] host queue property bit-field
-    UR_DEVICE_INFO_BUILT_IN_KERNELS = 62,                           ///< [char[]] a semi-colon separated list of built-in kernels
-    UR_DEVICE_INFO_PLATFORM = 63,                                   ///< [::ur_platform_handle_t] the platform associated with the device
-    UR_DEVICE_INFO_REFERENCE_COUNT = 64,                            ///< [uint32_t] Reference count of the device object.
-                                                                    ///< The reference count returned should be considered immediately stale.
-                                                                    ///< It is unsuitable for general use in applications. This feature is
-                                                                    ///< provided for identifying memory leaks.
-    UR_DEVICE_INFO_IL_VERSION = 65,                                 ///< [char[]] IL version
-    UR_DEVICE_INFO_NAME = 66,                                       ///< [char[]] Device name
-    UR_DEVICE_INFO_VENDOR = 67,                                     ///< [char[]] Device vendor
-    UR_DEVICE_INFO_DRIVER_VERSION = 68,                             ///< [char[]] Driver version
-    UR_DEVICE_INFO_PROFILE = 69,                                    ///< [char[]] Device profile
-    UR_DEVICE_INFO_VERSION = 70,                                    ///< [char[]] Device version
-    UR_DEVICE_INFO_BACKEND_RUNTIME_VERSION = 71,                    ///< [char[]] Version of backend runtime
-    UR_DEVICE_INFO_EXTENSIONS = 72,                                 ///< [char[]] Return a space separated list of extension names
-    UR_DEVICE_INFO_PRINTF_BUFFER_SIZE = 73,                         ///< [size_t] Maximum size in bytes of internal printf buffer
-    UR_DEVICE_INFO_PREFERRED_INTEROP_USER_SYNC = 74,                ///< [::ur_bool_t] prefer user synchronization when sharing object with
-                                                                    ///< other API
-    UR_DEVICE_INFO_PARENT_DEVICE = 75,                              ///< [::ur_device_handle_t] return parent device handle
-    UR_DEVICE_INFO_SUPPORTED_PARTITIONS = 76,                       ///< [::ur_device_partition_t[]] Returns an array of partition types
-                                                                    ///< supported by the device
-    UR_DEVICE_INFO_PARTITION_MAX_SUB_DEVICES = 77,                  ///< [uint32_t] maximum number of sub-devices when the device is
-                                                                    ///< partitioned
-    UR_DEVICE_INFO_PARTITION_AFFINITY_DOMAIN = 78,                  ///< [::ur_device_affinity_domain_flags_t] Returns a bit-field of the
-                                                                    ///< supported affinity domains for partitioning.
-                                                                    ///< If the device does not support any affinity domains, then 0 will be returned.
-    UR_DEVICE_INFO_PARTITION_TYPE = 79,                             ///< [::ur_device_partition_property_t[]] return an array of
-                                                                    ///< ::ur_device_partition_property_t for properties specified in
-                                                                    ///< ::urDevicePartition
-    UR_DEVICE_INFO_MAX_NUM_SUB_GROUPS = 80,                         ///< [uint32_t] max number of sub groups
-    UR_DEVICE_INFO_SUB_GROUP_INDEPENDENT_FORWARD_PROGRESS = 81,     ///< [::ur_bool_t] support sub group independent forward progress
-    UR_DEVICE_INFO_SUB_GROUP_SIZES_INTEL = 82,                      ///< [uint32_t[]] return an array of sub group sizes supported on Intel
-                                                                    ///< device
-    UR_DEVICE_INFO_USM_HOST_SUPPORT = 83,                           ///< [::ur_device_usm_access_capability_flags_t] support USM host memory
-                                                                    ///< access
-    UR_DEVICE_INFO_USM_DEVICE_SUPPORT = 84,                         ///< [::ur_device_usm_access_capability_flags_t] support USM device memory
-                                                                    ///< access
-    UR_DEVICE_INFO_USM_SINGLE_SHARED_SUPPORT = 85,                  ///< [::ur_device_usm_access_capability_flags_t] support USM single device
-                                                                    ///< shared memory access
-    UR_DEVICE_INFO_USM_CROSS_SHARED_SUPPORT = 86,                   ///< [::ur_device_usm_access_capability_flags_t] support USM cross device
-                                                                    ///< shared memory access
-    UR_DEVICE_INFO_USM_SYSTEM_SHARED_SUPPORT = 87,                  ///< [::ur_device_usm_access_capability_flags_t] support USM system wide
-                                                                    ///< shared memory access
-    UR_DEVICE_INFO_UUID = 88,                                       ///< [char[]] return device UUID
-    UR_DEVICE_INFO_PCI_ADDRESS = 89,                                ///< [char[]] return device PCI address
-    UR_DEVICE_INFO_GPU_EU_COUNT = 90,                               ///< [uint32_t] return Intel GPU EU count
-    UR_DEVICE_INFO_GPU_EU_SIMD_WIDTH = 91,                          ///< [uint32_t] return Intel GPU EU SIMD width
-    UR_DEVICE_INFO_GPU_EU_SLICES = 92,                              ///< [uint32_t] return Intel GPU number of slices
-    UR_DEVICE_INFO_GPU_EU_COUNT_PER_SUBSLICE = 93,                  ///< [uint32_t] return Intel GPU EU count per subslice
-    UR_DEVICE_INFO_GPU_SUBSLICES_PER_SLICE = 94,                    ///< [uint32_t] return Intel GPU number of subslices per slice
-    UR_DEVICE_INFO_GPU_HW_THREADS_PER_EU = 95,                      ///< [uint32_t] return Intel GPU number of threads per EU
-    UR_DEVICE_INFO_MAX_MEMORY_BANDWIDTH = 96,                       ///< [uint32_t] return max memory bandwidth in Mb/s
-    UR_DEVICE_INFO_IMAGE_SRGB = 97,                                 ///< [::ur_bool_t] device supports sRGB images
-    UR_DEVICE_INFO_BUILD_ON_SUBDEVICE = 98,                         ///< [::ur_bool_t] Return true if sub-device should do its own program
-                                                                    ///< build
-    UR_DEVICE_INFO_ATOMIC_64 = 99,                                  ///< [::ur_bool_t] support 64 bit atomics
-    UR_DEVICE_INFO_ATOMIC_MEMORY_ORDER_CAPABILITIES = 100,          ///< [::ur_memory_order_capability_flags_t] return a bit-field of atomic
-                                                                    ///< memory order capabilities
-    UR_DEVICE_INFO_ATOMIC_MEMORY_SCOPE_CAPABILITIES = 101,          ///< [::ur_memory_scope_capability_flags_t] return a bit-field of atomic
-                                                                    ///< memory scope capabilities
-    UR_DEVICE_INFO_ATOMIC_FENCE_ORDER_CAPABILITIES = 102,           ///< [::ur_memory_order_capability_flags_t] return a bit-field of atomic
-                                                                    ///< memory fence order capabilities
-    UR_DEVICE_INFO_ATOMIC_FENCE_SCOPE_CAPABILITIES = 103,           ///< [::ur_memory_scope_capability_flags_t] return a bit-field of atomic
-                                                                    ///< memory fence scope capabilities
-    UR_DEVICE_INFO_BFLOAT16 = 104,                                  ///< [::ur_bool_t] support for bfloat16
-    UR_DEVICE_INFO_MAX_COMPUTE_QUEUE_INDICES = 105,                 ///< [uint32_t] Returns 1 if the device doesn't have a notion of a
-                                                                    ///< queue index. Otherwise, returns the number of queue indices that are
-                                                                    ///< available for this device.
-    UR_DEVICE_INFO_KERNEL_SET_SPECIALIZATION_CONSTANTS = 106,       ///< [::ur_bool_t] support the ::urKernelSetSpecializationConstants entry
-                                                                    ///< point
-    UR_DEVICE_INFO_MEMORY_BUS_WIDTH = 107,                          ///< [uint32_t] return the width in bits of the memory bus interface of the
-                                                                    ///< device.
-    UR_DEVICE_INFO_MAX_WORK_GROUPS_3D = 108,                        ///< [size_t[3]] return max 3D work groups
-    UR_DEVICE_INFO_ASYNC_BARRIER = 109,                             ///< [::ur_bool_t] return true if Async Barrier is supported
-    UR_DEVICE_INFO_MEM_CHANNEL_SUPPORT = 110,                       ///< [::ur_bool_t] return true if specifying memory channels is supported
-    UR_DEVICE_INFO_HOST_PIPE_READ_WRITE_SUPPORTED = 111,            ///< [::ur_bool_t] Return true if the device supports enqueueing commands
-                                                                    ///< to read and write pipes from the host.
-    UR_DEVICE_INFO_MAX_REGISTERS_PER_WORK_GROUP = 112,              ///< [uint32_t] The maximum number of registers available per block.
-    UR_DEVICE_INFO_IP_VERSION = 113,                                ///< [uint32_t] The device IP version. The meaning of the device IP version
-                                                                    ///< is implementation-defined, but newer devices should have a higher
-                                                                    ///< version than older devices.
-    UR_DEVICE_INFO_VIRTUAL_MEMORY_SUPPORT = 114,                    ///< [::ur_bool_t] return true if the device supports virtual memory.
-    UR_DEVICE_INFO_ESIMD_SUPPORT = 115,                             ///< [::ur_bool_t] return true if the device supports ESIMD.
-    UR_DEVICE_INFO_COMPONENT_DEVICES = 116,                         ///< [::ur_device_handle_t[]] The set of component devices contained by
-                                                                    ///< this composite device.
-    UR_DEVICE_INFO_COMPOSITE_DEVICE = 117,                          ///< [::ur_device_handle_t] The composite device containing this component
-                                                                    ///< device.
-    UR_DEVICE_INFO_COMMAND_BUFFER_SUPPORT_EXP = 0x1000,             ///< [::ur_bool_t] Returns true if the device supports the use of
-                                                                    ///< command-buffers.
-    UR_DEVICE_INFO_COMMAND_BUFFER_UPDATE_SUPPORT_EXP = 0x1001,      ///< [::ur_bool_t] Returns true if the device supports updating the kernel
-                                                                    ///< commands in a command-buffer.
-    UR_DEVICE_INFO_BINDLESS_IMAGES_SUPPORT_EXP = 0x2000,            ///< [::ur_bool_t] returns true if the device supports the creation of
-                                                                    ///< bindless images
-    UR_DEVICE_INFO_BINDLESS_IMAGES_SHARED_USM_SUPPORT_EXP = 0x2001, ///< [::ur_bool_t] returns true if the device supports the creation of
-                                                                    ///< bindless images backed by shared USM
-    UR_DEVICE_INFO_BINDLESS_IMAGES_1D_USM_SUPPORT_EXP = 0x2002,     ///< [::ur_bool_t] returns true if the device supports the creation of 1D
-                                                                    ///< bindless images backed by USM
-    UR_DEVICE_INFO_BINDLESS_IMAGES_2D_USM_SUPPORT_EXP = 0x2003,     ///< [::ur_bool_t] returns true if the device supports the creation of 2D
-                                                                    ///< bindless images backed by USM
-    UR_DEVICE_INFO_IMAGE_PITCH_ALIGN_EXP = 0x2004,                  ///< [uint32_t] returns the required alignment of the pitch between two
-                                                                    ///< rows of an image in bytes
-    UR_DEVICE_INFO_MAX_IMAGE_LINEAR_WIDTH_EXP = 0x2005,             ///< [size_t] returns the maximum linear width allowed for images allocated
-                                                                    ///< using USM
-    UR_DEVICE_INFO_MAX_IMAGE_LINEAR_HEIGHT_EXP = 0x2006,            ///< [size_t] returns the maximum linear height allowed for images
-                                                                    ///< allocated using USM
-    UR_DEVICE_INFO_MAX_IMAGE_LINEAR_PITCH_EXP = 0x2007,             ///< [size_t] returns the maximum linear pitch allowed for images allocated
-                                                                    ///< using USM
-    UR_DEVICE_INFO_MIPMAP_SUPPORT_EXP = 0x2008,                     ///< [::ur_bool_t] returns true if the device supports allocating mipmap
-                                                                    ///< resources
-    UR_DEVICE_INFO_MIPMAP_ANISOTROPY_SUPPORT_EXP = 0x2009,          ///< [::ur_bool_t] returns true if the device supports sampling mipmap
-                                                                    ///< images with anisotropic filtering
-    UR_DEVICE_INFO_MIPMAP_MAX_ANISOTROPY_EXP = 0x200A,              ///< [uint32_t] returns the maximum anisotropic ratio supported by the
-                                                                    ///< device
-    UR_DEVICE_INFO_MIPMAP_LEVEL_REFERENCE_SUPPORT_EXP = 0x200B,     ///< [::ur_bool_t] returns true if the device supports using images created
-                                                                    ///< from individual mipmap levels
-    UR_DEVICE_INFO_INTEROP_MEMORY_IMPORT_SUPPORT_EXP = 0x200C,      ///< [::ur_bool_t] returns true if the device supports importing external
-                                                                    ///< memory resources
-    UR_DEVICE_INFO_INTEROP_MEMORY_EXPORT_SUPPORT_EXP = 0x200D,      ///< [::ur_bool_t] returns true if the device supports exporting internal
-                                                                    ///< memory resources
-    UR_DEVICE_INFO_INTEROP_SEMAPHORE_IMPORT_SUPPORT_EXP = 0x200E,   ///< [::ur_bool_t] returns true if the device supports importing external
-                                                                    ///< semaphore resources
-    UR_DEVICE_INFO_INTEROP_SEMAPHORE_EXPORT_SUPPORT_EXP = 0x200F,   ///< [::ur_bool_t] returns true if the device supports exporting internal
-                                                                    ///< event resources
+    UR_DEVICE_INFO_TYPE = 0,                                         ///< [::ur_device_type_t] type of the device
+    UR_DEVICE_INFO_VENDOR_ID = 1,                                    ///< [uint32_t] vendor Id of the device
+    UR_DEVICE_INFO_DEVICE_ID = 2,                                    ///< [uint32_t] Id of the device
+    UR_DEVICE_INFO_MAX_COMPUTE_UNITS = 3,                            ///< [uint32_t] the number of compute units
+    UR_DEVICE_INFO_MAX_WORK_ITEM_DIMENSIONS = 4,                     ///< [uint32_t] max work item dimensions
+    UR_DEVICE_INFO_MAX_WORK_ITEM_SIZES = 5,                          ///< [size_t[]] return an array of max work item sizes
+    UR_DEVICE_INFO_MAX_WORK_GROUP_SIZE = 6,                          ///< [size_t] max work group size
+    UR_DEVICE_INFO_SINGLE_FP_CONFIG = 7,                             ///< [::ur_device_fp_capability_flags_t] single precision floating point
+                                                                     ///< capability
+    UR_DEVICE_INFO_HALF_FP_CONFIG = 8,                               ///< [::ur_device_fp_capability_flags_t] half precision floating point
+                                                                     ///< capability
+    UR_DEVICE_INFO_DOUBLE_FP_CONFIG = 9,                             ///< [::ur_device_fp_capability_flags_t] double precision floating point
+                                                                     ///< capability
+    UR_DEVICE_INFO_QUEUE_PROPERTIES = 10,                            ///< [::ur_queue_flags_t] command queue properties supported by the device
+    UR_DEVICE_INFO_PREFERRED_VECTOR_WIDTH_CHAR = 11,                 ///< [uint32_t] preferred vector width for char
+    UR_DEVICE_INFO_PREFERRED_VECTOR_WIDTH_SHORT = 12,                ///< [uint32_t] preferred vector width for short
+    UR_DEVICE_INFO_PREFERRED_VECTOR_WIDTH_INT = 13,                  ///< [uint32_t] preferred vector width for int
+    UR_DEVICE_INFO_PREFERRED_VECTOR_WIDTH_LONG = 14,                 ///< [uint32_t] preferred vector width for long
+    UR_DEVICE_INFO_PREFERRED_VECTOR_WIDTH_FLOAT = 15,                ///< [uint32_t] preferred vector width for float
+    UR_DEVICE_INFO_PREFERRED_VECTOR_WIDTH_DOUBLE = 16,               ///< [uint32_t] preferred vector width for double
+    UR_DEVICE_INFO_PREFERRED_VECTOR_WIDTH_HALF = 17,                 ///< [uint32_t] preferred vector width for half float
+    UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_CHAR = 18,                    ///< [uint32_t] native vector width for char
+    UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_SHORT = 19,                   ///< [uint32_t] native vector width for short
+    UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_INT = 20,                     ///< [uint32_t] native vector width for int
+    UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_LONG = 21,                    ///< [uint32_t] native vector width for long
+    UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_FLOAT = 22,                   ///< [uint32_t] native vector width for float
+    UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_DOUBLE = 23,                  ///< [uint32_t] native vector width for double
+    UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_HALF = 24,                    ///< [uint32_t] native vector width for half float
+    UR_DEVICE_INFO_MAX_CLOCK_FREQUENCY = 25,                         ///< [uint32_t] max clock frequency in MHz
+    UR_DEVICE_INFO_MEMORY_CLOCK_RATE = 26,                           ///< [uint32_t] memory clock frequency in MHz
+    UR_DEVICE_INFO_ADDRESS_BITS = 27,                                ///< [uint32_t] address bits
+    UR_DEVICE_INFO_MAX_MEM_ALLOC_SIZE = 28,                          ///< [uint64_t] max memory allocation size
+    UR_DEVICE_INFO_IMAGE_SUPPORTED = 29,                             ///< [::ur_bool_t] images are supported
+    UR_DEVICE_INFO_MAX_READ_IMAGE_ARGS = 30,                         ///< [uint32_t] max number of image objects arguments of a kernel declared
+                                                                     ///< with the read_only qualifier
+    UR_DEVICE_INFO_MAX_WRITE_IMAGE_ARGS = 31,                        ///< [uint32_t] max number of image objects arguments of a kernel declared
+                                                                     ///< with the write_only qualifier
+    UR_DEVICE_INFO_MAX_READ_WRITE_IMAGE_ARGS = 32,                   ///< [uint32_t] max number of image objects arguments of a kernel declared
+                                                                     ///< with the read_write qualifier
+    UR_DEVICE_INFO_IMAGE2D_MAX_WIDTH = 33,                           ///< [size_t] max width of Image2D object
+    UR_DEVICE_INFO_IMAGE2D_MAX_HEIGHT = 34,                          ///< [size_t] max height of Image2D object
+    UR_DEVICE_INFO_IMAGE3D_MAX_WIDTH = 35,                           ///< [size_t] max width of Image3D object
+    UR_DEVICE_INFO_IMAGE3D_MAX_HEIGHT = 36,                          ///< [size_t] max height of Image3D object
+    UR_DEVICE_INFO_IMAGE3D_MAX_DEPTH = 37,                           ///< [size_t] max depth of Image3D object
+    UR_DEVICE_INFO_IMAGE_MAX_BUFFER_SIZE = 38,                       ///< [size_t] max image buffer size
+    UR_DEVICE_INFO_IMAGE_MAX_ARRAY_SIZE = 39,                        ///< [size_t] max image array size
+    UR_DEVICE_INFO_MAX_SAMPLERS = 40,                                ///< [uint32_t] max number of samplers that can be used in a kernel
+    UR_DEVICE_INFO_MAX_PARAMETER_SIZE = 41,                          ///< [size_t] max size in bytes of all arguments passed to a kernel
+    UR_DEVICE_INFO_MEM_BASE_ADDR_ALIGN = 42,                         ///< [uint32_t] memory base address alignment
+    UR_DEVICE_INFO_GLOBAL_MEM_CACHE_TYPE = 43,                       ///< [::ur_device_mem_cache_type_t] global memory cache type
+    UR_DEVICE_INFO_GLOBAL_MEM_CACHELINE_SIZE = 44,                   ///< [uint32_t] global memory cache line size in bytes
+    UR_DEVICE_INFO_GLOBAL_MEM_CACHE_SIZE = 45,                       ///< [uint64_t] size of global memory cache in bytes
+    UR_DEVICE_INFO_GLOBAL_MEM_SIZE = 46,                             ///< [uint64_t] size of global memory in bytes
+    UR_DEVICE_INFO_GLOBAL_MEM_FREE = 47,                             ///< [uint64_t] size of global memory which is free in bytes
+    UR_DEVICE_INFO_MAX_CONSTANT_BUFFER_SIZE = 48,                    ///< [uint64_t] max constant buffer size in bytes
+    UR_DEVICE_INFO_MAX_CONSTANT_ARGS = 49,                           ///< [uint32_t] max number of __const declared arguments in a kernel
+    UR_DEVICE_INFO_LOCAL_MEM_TYPE = 50,                              ///< [::ur_device_local_mem_type_t] local memory type
+    UR_DEVICE_INFO_LOCAL_MEM_SIZE = 51,                              ///< [uint64_t] local memory size in bytes
+    UR_DEVICE_INFO_ERROR_CORRECTION_SUPPORT = 52,                    ///< [::ur_bool_t] support error correction to global and local memory
+    UR_DEVICE_INFO_HOST_UNIFIED_MEMORY = 53,                         ///< [::ur_bool_t] unified host device memory
+    UR_DEVICE_INFO_PROFILING_TIMER_RESOLUTION = 54,                  ///< [size_t] profiling timer resolution in nanoseconds
+    UR_DEVICE_INFO_ENDIAN_LITTLE = 55,                               ///< [::ur_bool_t] little endian byte order
+    UR_DEVICE_INFO_AVAILABLE = 56,                                   ///< [::ur_bool_t] device is available
+    UR_DEVICE_INFO_COMPILER_AVAILABLE = 57,                          ///< [::ur_bool_t] device compiler is available
+    UR_DEVICE_INFO_LINKER_AVAILABLE = 58,                            ///< [::ur_bool_t] device linker is available
+    UR_DEVICE_INFO_EXECUTION_CAPABILITIES = 59,                      ///< [::ur_device_exec_capability_flags_t] device kernel execution
+                                                                     ///< capability bit-field
+    UR_DEVICE_INFO_QUEUE_ON_DEVICE_PROPERTIES = 60,                  ///< [::ur_queue_flags_t] device command queue property bit-field
+    UR_DEVICE_INFO_QUEUE_ON_HOST_PROPERTIES = 61,                    ///< [::ur_queue_flags_t] host queue property bit-field
+    UR_DEVICE_INFO_BUILT_IN_KERNELS = 62,                            ///< [char[]] a semi-colon separated list of built-in kernels
+    UR_DEVICE_INFO_PLATFORM = 63,                                    ///< [::ur_platform_handle_t] the platform associated with the device
+    UR_DEVICE_INFO_REFERENCE_COUNT = 64,                             ///< [uint32_t] Reference count of the device object.
+                                                                     ///< The reference count returned should be considered immediately stale.
+                                                                     ///< It is unsuitable for general use in applications. This feature is
+                                                                     ///< provided for identifying memory leaks.
+    UR_DEVICE_INFO_IL_VERSION = 65,                                  ///< [char[]] IL version
+    UR_DEVICE_INFO_NAME = 66,                                        ///< [char[]] Device name
+    UR_DEVICE_INFO_VENDOR = 67,                                      ///< [char[]] Device vendor
+    UR_DEVICE_INFO_DRIVER_VERSION = 68,                              ///< [char[]] Driver version
+    UR_DEVICE_INFO_PROFILE = 69,                                     ///< [char[]] Device profile
+    UR_DEVICE_INFO_VERSION = 70,                                     ///< [char[]] Device version
+    UR_DEVICE_INFO_BACKEND_RUNTIME_VERSION = 71,                     ///< [char[]] Version of backend runtime
+    UR_DEVICE_INFO_EXTENSIONS = 72,                                  ///< [char[]] Return a space separated list of extension names
+    UR_DEVICE_INFO_PRINTF_BUFFER_SIZE = 73,                          ///< [size_t] Maximum size in bytes of internal printf buffer
+    UR_DEVICE_INFO_PREFERRED_INTEROP_USER_SYNC = 74,                 ///< [::ur_bool_t] prefer user synchronization when sharing object with
+                                                                     ///< other API
+    UR_DEVICE_INFO_PARENT_DEVICE = 75,                               ///< [::ur_device_handle_t] return parent device handle
+    UR_DEVICE_INFO_SUPPORTED_PARTITIONS = 76,                        ///< [::ur_device_partition_t[]] Returns an array of partition types
+                                                                     ///< supported by the device
+    UR_DEVICE_INFO_PARTITION_MAX_SUB_DEVICES = 77,                   ///< [uint32_t] maximum number of sub-devices when the device is
+                                                                     ///< partitioned
+    UR_DEVICE_INFO_PARTITION_AFFINITY_DOMAIN = 78,                   ///< [::ur_device_affinity_domain_flags_t] Returns a bit-field of the
+                                                                     ///< supported affinity domains for partitioning.
+                                                                     ///< If the device does not support any affinity domains, then 0 will be returned.
+    UR_DEVICE_INFO_PARTITION_TYPE = 79,                              ///< [::ur_device_partition_property_t[]] return an array of
+                                                                     ///< ::ur_device_partition_property_t for properties specified in
+                                                                     ///< ::urDevicePartition
+    UR_DEVICE_INFO_MAX_NUM_SUB_GROUPS = 80,                          ///< [uint32_t] max number of sub groups
+    UR_DEVICE_INFO_SUB_GROUP_INDEPENDENT_FORWARD_PROGRESS = 81,      ///< [::ur_bool_t] support sub group independent forward progress
+    UR_DEVICE_INFO_SUB_GROUP_SIZES_INTEL = 82,                       ///< [uint32_t[]] return an array of sub group sizes supported on Intel
+                                                                     ///< device
+    UR_DEVICE_INFO_USM_HOST_SUPPORT = 83,                            ///< [::ur_device_usm_access_capability_flags_t] support USM host memory
+                                                                     ///< access
+    UR_DEVICE_INFO_USM_DEVICE_SUPPORT = 84,                          ///< [::ur_device_usm_access_capability_flags_t] support USM device memory
+                                                                     ///< access
+    UR_DEVICE_INFO_USM_SINGLE_SHARED_SUPPORT = 85,                   ///< [::ur_device_usm_access_capability_flags_t] support USM single device
+                                                                     ///< shared memory access
+    UR_DEVICE_INFO_USM_CROSS_SHARED_SUPPORT = 86,                    ///< [::ur_device_usm_access_capability_flags_t] support USM cross device
+                                                                     ///< shared memory access
+    UR_DEVICE_INFO_USM_SYSTEM_SHARED_SUPPORT = 87,                   ///< [::ur_device_usm_access_capability_flags_t] support USM system wide
+                                                                     ///< shared memory access
+    UR_DEVICE_INFO_UUID = 88,                                        ///< [uint8_t[]] return device UUID
+    UR_DEVICE_INFO_PCI_ADDRESS = 89,                                 ///< [char[]] return device PCI address
+    UR_DEVICE_INFO_GPU_EU_COUNT = 90,                                ///< [uint32_t] return Intel GPU EU count
+    UR_DEVICE_INFO_GPU_EU_SIMD_WIDTH = 91,                           ///< [uint32_t] return Intel GPU EU SIMD width
+    UR_DEVICE_INFO_GPU_EU_SLICES = 92,                               ///< [uint32_t] return Intel GPU number of slices
+    UR_DEVICE_INFO_GPU_EU_COUNT_PER_SUBSLICE = 93,                   ///< [uint32_t] return Intel GPU EU count per subslice
+    UR_DEVICE_INFO_GPU_SUBSLICES_PER_SLICE = 94,                     ///< [uint32_t] return Intel GPU number of subslices per slice
+    UR_DEVICE_INFO_GPU_HW_THREADS_PER_EU = 95,                       ///< [uint32_t] return Intel GPU number of threads per EU
+    UR_DEVICE_INFO_MAX_MEMORY_BANDWIDTH = 96,                        ///< [uint32_t] return max memory bandwidth in Mb/s
+    UR_DEVICE_INFO_IMAGE_SRGB = 97,                                  ///< [::ur_bool_t] device supports sRGB images
+    UR_DEVICE_INFO_BUILD_ON_SUBDEVICE = 98,                          ///< [::ur_bool_t] Return true if sub-device should do its own program
+                                                                     ///< build
+    UR_DEVICE_INFO_ATOMIC_64 = 99,                                   ///< [::ur_bool_t] support 64 bit atomics
+    UR_DEVICE_INFO_ATOMIC_MEMORY_ORDER_CAPABILITIES = 100,           ///< [::ur_memory_order_capability_flags_t] return a bit-field of atomic
+                                                                     ///< memory order capabilities
+    UR_DEVICE_INFO_ATOMIC_MEMORY_SCOPE_CAPABILITIES = 101,           ///< [::ur_memory_scope_capability_flags_t] return a bit-field of atomic
+                                                                     ///< memory scope capabilities
+    UR_DEVICE_INFO_ATOMIC_FENCE_ORDER_CAPABILITIES = 102,            ///< [::ur_memory_order_capability_flags_t] return a bit-field of atomic
+                                                                     ///< memory fence order capabilities
+    UR_DEVICE_INFO_ATOMIC_FENCE_SCOPE_CAPABILITIES = 103,            ///< [::ur_memory_scope_capability_flags_t] return a bit-field of atomic
+                                                                     ///< memory fence scope capabilities
+    UR_DEVICE_INFO_BFLOAT16 = 104,                                   ///< [::ur_bool_t] support for bfloat16
+    UR_DEVICE_INFO_MAX_COMPUTE_QUEUE_INDICES = 105,                  ///< [uint32_t] Returns 1 if the device doesn't have a notion of a
+                                                                     ///< queue index. Otherwise, returns the number of queue indices that are
+                                                                     ///< available for this device.
+    UR_DEVICE_INFO_KERNEL_SET_SPECIALIZATION_CONSTANTS = 106,        ///< [::ur_bool_t] support the ::urKernelSetSpecializationConstants entry
+                                                                     ///< point
+    UR_DEVICE_INFO_MEMORY_BUS_WIDTH = 107,                           ///< [uint32_t] return the width in bits of the memory bus interface of the
+                                                                     ///< device.
+    UR_DEVICE_INFO_MAX_WORK_GROUPS_3D = 108,                         ///< [size_t[3]] return max 3D work groups
+    UR_DEVICE_INFO_ASYNC_BARRIER = 109,                              ///< [::ur_bool_t] return true if Async Barrier is supported
+    UR_DEVICE_INFO_MEM_CHANNEL_SUPPORT = 110,                        ///< [::ur_bool_t] return true if specifying memory channels is supported
+    UR_DEVICE_INFO_HOST_PIPE_READ_WRITE_SUPPORTED = 111,             ///< [::ur_bool_t] Return true if the device supports enqueueing commands
+                                                                     ///< to read and write pipes from the host.
+    UR_DEVICE_INFO_MAX_REGISTERS_PER_WORK_GROUP = 112,               ///< [uint32_t] The maximum number of registers available per block.
+    UR_DEVICE_INFO_IP_VERSION = 113,                                 ///< [uint32_t] The device IP version. The meaning of the device IP version
+                                                                     ///< is implementation-defined, but newer devices should have a higher
+                                                                     ///< version than older devices.
+    UR_DEVICE_INFO_VIRTUAL_MEMORY_SUPPORT = 114,                     ///< [::ur_bool_t] return true if the device supports virtual memory.
+    UR_DEVICE_INFO_ESIMD_SUPPORT = 115,                              ///< [::ur_bool_t] return true if the device supports ESIMD.
+    UR_DEVICE_INFO_COMPONENT_DEVICES = 116,                          ///< [::ur_device_handle_t[]] The set of component devices contained by
+                                                                     ///< this composite device.
+    UR_DEVICE_INFO_COMPOSITE_DEVICE = 117,                           ///< [::ur_device_handle_t] The composite device containing this component
+                                                                     ///< device.
+    UR_DEVICE_INFO_COMMAND_BUFFER_SUPPORT_EXP = 0x1000,              ///< [::ur_bool_t] Returns true if the device supports the use of
+                                                                     ///< command-buffers.
+    UR_DEVICE_INFO_COMMAND_BUFFER_UPDATE_SUPPORT_EXP = 0x1001,       ///< [::ur_bool_t] Returns true if the device supports updating the kernel
+                                                                     ///< commands in a command-buffer.
+    UR_DEVICE_INFO_BINDLESS_IMAGES_SUPPORT_EXP = 0x2000,             ///< [::ur_bool_t] returns true if the device supports the creation of
+                                                                     ///< bindless images
+    UR_DEVICE_INFO_BINDLESS_IMAGES_SHARED_USM_SUPPORT_EXP = 0x2001,  ///< [::ur_bool_t] returns true if the device supports the creation of
+                                                                     ///< bindless images backed by shared USM
+    UR_DEVICE_INFO_BINDLESS_IMAGES_1D_USM_SUPPORT_EXP = 0x2002,      ///< [::ur_bool_t] returns true if the device supports the creation of 1D
+                                                                     ///< bindless images backed by USM
+    UR_DEVICE_INFO_BINDLESS_IMAGES_2D_USM_SUPPORT_EXP = 0x2003,      ///< [::ur_bool_t] returns true if the device supports the creation of 2D
+                                                                     ///< bindless images backed by USM
+    UR_DEVICE_INFO_IMAGE_PITCH_ALIGN_EXP = 0x2004,                   ///< [uint32_t] returns the required alignment of the pitch between two
+                                                                     ///< rows of an image in bytes
+    UR_DEVICE_INFO_MAX_IMAGE_LINEAR_WIDTH_EXP = 0x2005,              ///< [size_t] returns the maximum linear width allowed for images allocated
+                                                                     ///< using USM
+    UR_DEVICE_INFO_MAX_IMAGE_LINEAR_HEIGHT_EXP = 0x2006,             ///< [size_t] returns the maximum linear height allowed for images
+                                                                     ///< allocated using USM
+    UR_DEVICE_INFO_MAX_IMAGE_LINEAR_PITCH_EXP = 0x2007,              ///< [size_t] returns the maximum linear pitch allowed for images allocated
+                                                                     ///< using USM
+    UR_DEVICE_INFO_MIPMAP_SUPPORT_EXP = 0x2008,                      ///< [::ur_bool_t] returns true if the device supports allocating mipmap
+                                                                     ///< resources
+    UR_DEVICE_INFO_MIPMAP_ANISOTROPY_SUPPORT_EXP = 0x2009,           ///< [::ur_bool_t] returns true if the device supports sampling mipmap
+                                                                     ///< images with anisotropic filtering
+    UR_DEVICE_INFO_MIPMAP_MAX_ANISOTROPY_EXP = 0x200A,               ///< [uint32_t] returns the maximum anisotropic ratio supported by the
+                                                                     ///< device
+    UR_DEVICE_INFO_MIPMAP_LEVEL_REFERENCE_SUPPORT_EXP = 0x200B,      ///< [::ur_bool_t] returns true if the device supports using images created
+                                                                     ///< from individual mipmap levels
+    UR_DEVICE_INFO_INTEROP_MEMORY_IMPORT_SUPPORT_EXP = 0x200C,       ///< [::ur_bool_t] returns true if the device supports importing external
+                                                                     ///< memory resources
+    UR_DEVICE_INFO_INTEROP_MEMORY_EXPORT_SUPPORT_EXP = 0x200D,       ///< [::ur_bool_t] returns true if the device supports exporting internal
+                                                                     ///< memory resources
+    UR_DEVICE_INFO_INTEROP_SEMAPHORE_IMPORT_SUPPORT_EXP = 0x200E,    ///< [::ur_bool_t] returns true if the device supports importing external
+                                                                     ///< semaphore resources
+    UR_DEVICE_INFO_INTEROP_SEMAPHORE_EXPORT_SUPPORT_EXP = 0x200F,    ///< [::ur_bool_t] returns true if the device supports exporting internal
+                                                                     ///< event resources
+    UR_DEVICE_INFO_CUBEMAP_SUPPORT_EXP = 0x2010,                     ///< [::ur_bool_t] returns true if the device supports allocating and
+                                                                     ///< accessing cubemap resources
+    UR_DEVICE_INFO_CUBEMAP_SEAMLESS_FILTERING_SUPPORT_EXP = 0x2011,  ///< [::ur_bool_t] returns true if the device supports sampling cubemapped
+                                                                     ///< images across face boundaries
+    UR_DEVICE_INFO_BINDLESS_SAMPLED_IMAGE_FETCH_1D_USM_EXP = 0x2012, ///< [::ur_bool_t] returns true if the device is capable of fetching USM
+                                                                     ///< backed 1D sampled image data.
+    UR_DEVICE_INFO_BINDLESS_SAMPLED_IMAGE_FETCH_1D_EXP = 0x2013,     ///< [::ur_bool_t] returns true if the device is capable of fetching
+                                                                     ///< non-USM backed 1D sampled image data.
+    UR_DEVICE_INFO_BINDLESS_SAMPLED_IMAGE_FETCH_2D_USM_EXP = 0x2014, ///< [::ur_bool_t] returns true if the device is capable of fetching USM
+                                                                     ///< backed 2D sampled image data.
+    UR_DEVICE_INFO_BINDLESS_SAMPLED_IMAGE_FETCH_2D_EXP = 0x2015,     ///< [::ur_bool_t] returns true if the device is capable of fetching
+                                                                     ///< non-USM backed 2D sampled image data.
+    UR_DEVICE_INFO_BINDLESS_SAMPLED_IMAGE_FETCH_3D_USM_EXP = 0x2016, ///< [::ur_bool_t] returns true if the device is capable of fetching USM
+                                                                     ///< backed 3D sampled image data.
+    UR_DEVICE_INFO_BINDLESS_SAMPLED_IMAGE_FETCH_3D_EXP = 0x2017,     ///< [::ur_bool_t] returns true if the device is capable of fetching
+                                                                     ///< non-USM backed 3D sampled image data.
+    UR_DEVICE_INFO_TIMESTAMP_RECORDING_SUPPORT_EXP = 0x2018,         ///< [::ur_bool_t] returns true if the device supports timestamp recording
     /// @cond
     UR_DEVICE_INFO_FORCE_UINT32 = 0x7fffffff
     /// @endcond
@@ -1647,7 +1669,7 @@ typedef enum ur_device_info_t {
 ///     - ::UR_RESULT_ERROR_INVALID_NULL_HANDLE
 ///         + `NULL == hDevice`
 ///     - ::UR_RESULT_ERROR_INVALID_ENUMERATION
-///         + `::UR_DEVICE_INFO_INTEROP_SEMAPHORE_EXPORT_SUPPORT_EXP < propName`
+///         + `::UR_DEVICE_INFO_TIMESTAMP_RECORDING_SUPPORT_EXP < propName`
 ///     - ::UR_RESULT_ERROR_UNSUPPORTED_ENUMERATION
 ///         + If `propName` is not supported by the adapter.
 ///     - ::UR_RESULT_ERROR_INVALID_SIZE
@@ -2418,13 +2440,14 @@ typedef enum ur_mem_flag_t {
 ///////////////////////////////////////////////////////////////////////////////
 /// @brief Memory types
 typedef enum ur_mem_type_t {
-    UR_MEM_TYPE_BUFFER = 0,         ///< Buffer object
-    UR_MEM_TYPE_IMAGE2D = 1,        ///< 2D image object
-    UR_MEM_TYPE_IMAGE3D = 2,        ///< 3D image object
-    UR_MEM_TYPE_IMAGE2D_ARRAY = 3,  ///< 2D image array object
-    UR_MEM_TYPE_IMAGE1D = 4,        ///< 1D image object
-    UR_MEM_TYPE_IMAGE1D_ARRAY = 5,  ///< 1D image array object
-    UR_MEM_TYPE_IMAGE1D_BUFFER = 6, ///< 1D image buffer object
+    UR_MEM_TYPE_BUFFER = 0,                 ///< Buffer object
+    UR_MEM_TYPE_IMAGE2D = 1,                ///< 2D image object
+    UR_MEM_TYPE_IMAGE3D = 2,                ///< 3D image object
+    UR_MEM_TYPE_IMAGE2D_ARRAY = 3,          ///< 2D image array object
+    UR_MEM_TYPE_IMAGE1D = 4,                ///< 1D image object
+    UR_MEM_TYPE_IMAGE1D_ARRAY = 5,          ///< 1D image array object
+    UR_MEM_TYPE_IMAGE1D_BUFFER = 6,         ///< 1D image buffer object
+    UR_MEM_TYPE_IMAGE_CUBEMAP_EXP = 0x2000, ///< Experimental cubemap image object
     /// @cond
     UR_MEM_TYPE_FORCE_UINT32 = 0x7fffffff
     /// @endcond
@@ -2644,6 +2667,7 @@ typedef struct ur_buffer_alloc_location_properties_t {
 ///     - ::UR_RESULT_ERROR_INVALID_CONTEXT
 ///     - ::UR_RESULT_ERROR_INVALID_VALUE
 ///     - ::UR_RESULT_ERROR_INVALID_BUFFER_SIZE
+///         + `size == 0`
 ///     - ::UR_RESULT_ERROR_INVALID_HOST_PTR
 ///         + `pProperties == NULL && (flags & (UR_MEM_FLAG_USE_HOST_POINTER | UR_MEM_FLAG_ALLOC_COPY_HOST_POINTER)) != 0`
 ///         + `pProperties != NULL && pProperties->pHost == NULL && (flags & (UR_MEM_FLAG_USE_HOST_POINTER | UR_MEM_FLAG_ALLOC_COPY_HOST_POINTER)) != 0`
@@ -2752,6 +2776,8 @@ typedef enum ur_buffer_create_type_t {
 ///     - ::UR_RESULT_ERROR_OBJECT_ALLOCATION_FAILURE
 ///     - ::UR_RESULT_ERROR_INVALID_VALUE
 ///     - ::UR_RESULT_ERROR_INVALID_BUFFER_SIZE
+///         + `pRegion && pRegion->size == 0`
+///         + hBuffer allocation size < (pRegion->origin + pRegion->size)
 ///     - ::UR_RESULT_ERROR_INVALID_HOST_PTR
 ///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
@@ -3437,7 +3463,7 @@ urUSMHostAlloc(
     ur_context_handle_t hContext,  ///< [in] handle of the context object
     const ur_usm_desc_t *pUSMDesc, ///< [in][optional] USM memory allocation descriptor
     ur_usm_pool_handle_t pool,     ///< [in][optional] Pointer to a pool created using urUSMPoolCreate
-    size_t size,                   ///< [in] size in bytes of the USM memory object to be allocated
+    size_t size,                   ///< [in] minimum size in bytes of the USM memory object to be allocated
     void **ppMem                   ///< [out] pointer to USM host memory object
 );
 
@@ -3485,7 +3511,7 @@ urUSMDeviceAlloc(
     ur_device_handle_t hDevice,    ///< [in] handle of the device object
     const ur_usm_desc_t *pUSMDesc, ///< [in][optional] USM memory allocation descriptor
     ur_usm_pool_handle_t pool,     ///< [in][optional] Pointer to a pool created using urUSMPoolCreate
-    size_t size,                   ///< [in] size in bytes of the USM memory object to be allocated
+    size_t size,                   ///< [in] minimum size in bytes of the USM memory object to be allocated
     void **ppMem                   ///< [out] pointer to USM device memory object
 );
 
@@ -3534,7 +3560,7 @@ urUSMSharedAlloc(
     ur_device_handle_t hDevice,    ///< [in] handle of the device object
     const ur_usm_desc_t *pUSMDesc, ///< [in][optional] Pointer to USM memory allocation descriptor.
     ur_usm_pool_handle_t pool,     ///< [in][optional] Pointer to a pool created using urUSMPoolCreate
-    size_t size,                   ///< [in] size in bytes of the USM memory object to be allocated
+    size_t size,                   ///< [in] minimum size in bytes of the USM memory object to be allocated
     void **ppMem                   ///< [out] pointer to USM shared memory object
 );
 
@@ -4065,6 +4091,8 @@ typedef struct ur_program_properties_t {
 ///
 /// @details
 ///     - The application may call this function from simultaneous threads.
+///     - The adapter may (but is not required to) perform validation of the
+///       provided module during this call.
 ///
 /// @remarks
 ///   _Analogues_
@@ -4105,6 +4133,10 @@ urProgramCreateWithIL(
 ///     - Following a successful call to this entry point, `phProgram` will
 ///       contain a binary of type ::UR_PROGRAM_BINARY_TYPE_COMPILED_OBJECT or
 ///       ::UR_PROGRAM_BINARY_TYPE_LIBRARY for `hDevice`.
+///     - The device specified by `hDevice` must be device associated with
+///       context.
+///     - The adapter may (but is not required to) perform validation of the
+///       provided module during this call.
 ///
 /// @remarks
 ///   _Analogues_
@@ -4325,6 +4357,42 @@ urProgramGetFunctionPointer(
                                   ///< otherwise ::UR_RESULT_ERROR_INVALID_PROGRAM_EXECUTABLE is returned.
     const char *pFunctionName,    ///< [in] A null-terminates string denoting the mangled function name.
     void **ppFunctionPointer      ///< [out] Returns the pointer to the function if it is found in the program.
+);
+
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Retrieves a pointer to a device global variable.
+///
+/// @details
+///     - Retrieves a pointer to a device global variable.
+///     - The application may call this function from simultaneous threads for
+///       the same device.
+///     - The implementation of this function should be thread-safe.
+///
+/// @remarks
+///   _Analogues_
+///     - **clGetDeviceGlobalVariablePointerINTEL**
+///
+/// @returns
+///     - ::UR_RESULT_SUCCESS
+///     - ::UR_RESULT_ERROR_UNINITIALIZED
+///     - ::UR_RESULT_ERROR_DEVICE_LOST
+///     - ::UR_RESULT_ERROR_ADAPTER_SPECIFIC
+///     - ::UR_RESULT_ERROR_INVALID_NULL_HANDLE
+///         + `NULL == hDevice`
+///         + `NULL == hProgram`
+///     - ::UR_RESULT_ERROR_INVALID_NULL_POINTER
+///         + `NULL == pGlobalVariableName`
+///         + `NULL == ppGlobalVariablePointerRet`
+///     - ::UR_RESULT_ERROR_INVALID_VALUE
+///         + `name` is not a valid variable in the program.
+UR_APIEXPORT ur_result_t UR_APICALL
+urProgramGetGlobalVariablePointer(
+    ur_device_handle_t hDevice,       ///< [in] handle of the device to retrieve the pointer for.
+    ur_program_handle_t hProgram,     ///< [in] handle of the program where the global variable is.
+    const char *pGlobalVariableName,  ///< [in] mangled name of the global variable to retrieve the pointer for.
+    size_t *pGlobalVariableSizeRet,   ///< [out][optional] Returns the size of the global variable if it is found
+                                      ///< in the program.
+    void **ppGlobalVariablePointerRet ///< [out] Returns the pointer to the global variable if it is found in the program.
 );
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -4704,7 +4772,8 @@ typedef enum ur_kernel_group_info_t {
     UR_KERNEL_GROUP_INFO_GLOBAL_WORK_SIZE = 0,                   ///< [size_t[3]] Return Work Group maximum global size
     UR_KERNEL_GROUP_INFO_WORK_GROUP_SIZE = 1,                    ///< [size_t] Return maximum Work Group size
     UR_KERNEL_GROUP_INFO_COMPILE_WORK_GROUP_SIZE = 2,            ///< [size_t[3]] Return Work Group size required by the source code, such
-                                                                 ///< as __attribute__((required_work_group_size(X,Y,Z))
+                                                                 ///< as __attribute__((required_work_group_size(X,Y,Z)), or (0, 0, 0) if
+                                                                 ///< unspecified
     UR_KERNEL_GROUP_INFO_LOCAL_MEM_SIZE = 3,                     ///< [size_t] Return local memory required by the Kernel
     UR_KERNEL_GROUP_INFO_PREFERRED_WORK_GROUP_SIZE_MULTIPLE = 4, ///< [size_t] Return preferred multiple of Work Group size for launch
     UR_KERNEL_GROUP_INFO_PRIVATE_MEM_SIZE = 5,                   ///< [size_t] Return minimum amount of private memory in bytes used by each
@@ -4720,7 +4789,8 @@ typedef enum ur_kernel_group_info_t {
 typedef enum ur_kernel_sub_group_info_t {
     UR_KERNEL_SUB_GROUP_INFO_MAX_SUB_GROUP_SIZE = 0,     ///< [uint32_t] Return maximum SubGroup size
     UR_KERNEL_SUB_GROUP_INFO_MAX_NUM_SUB_GROUPS = 1,     ///< [uint32_t] Return maximum number of SubGroup
-    UR_KERNEL_SUB_GROUP_INFO_COMPILE_NUM_SUB_GROUPS = 2, ///< [uint32_t] Return number of SubGroup required by the source code
+    UR_KERNEL_SUB_GROUP_INFO_COMPILE_NUM_SUB_GROUPS = 2, ///< [uint32_t] Return number of SubGroup required by the source code or 0
+                                                         ///< if unspecified
     UR_KERNEL_SUB_GROUP_INFO_SUB_GROUP_SIZE_INTEL = 3,   ///< [uint32_t] Return SubGroup size required by Intel
     /// @cond
     UR_KERNEL_SUB_GROUP_INFO_FORCE_UINT32 = 0x7fffffff
@@ -5553,6 +5623,7 @@ typedef enum ur_command_t {
     UR_COMMAND_COMMAND_BUFFER_ENQUEUE_EXP = 0x1000,   ///< Event created by ::urCommandBufferEnqueueExp
     UR_COMMAND_INTEROP_SEMAPHORE_WAIT_EXP = 0x2000,   ///< Event created by ::urBindlessImagesWaitExternalSemaphoreExp
     UR_COMMAND_INTEROP_SEMAPHORE_SIGNAL_EXP = 0x2001, ///< Event created by ::urBindlessImagesSignalExternalSemaphoreExp
+    UR_COMMAND_TIMESTAMP_RECORDING_EXP = 0x2002,      ///< Event created by ::urEnqueueTimestampRecordingExp
     /// @cond
     UR_COMMAND_FORCE_UINT32 = 0x7fffffff
     /// @endcond
@@ -5566,6 +5637,7 @@ typedef enum ur_event_status_t {
     UR_EVENT_STATUS_RUNNING = 1,   ///< Command is running
     UR_EVENT_STATUS_SUBMITTED = 2, ///< Command is submitted
     UR_EVENT_STATUS_QUEUED = 3,    ///< Command is queued
+    UR_EVENT_STATUS_ERROR = 4,     ///< Command was abnormally terminated
     /// @cond
     UR_EVENT_STATUS_FORCE_UINT32 = 0x7fffffff
     /// @endcond
@@ -5697,6 +5769,8 @@ urEventGetProfilingInfo(
 ///         + `NULL == phEventWaitList`
 ///     - ::UR_RESULT_ERROR_INVALID_VALUE
 ///         + `numEvents == 0`
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_EVENT
 ///     - ::UR_RESULT_ERROR_INVALID_CONTEXT
 ///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
@@ -5912,9 +5986,12 @@ urEventSetCallback(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_WORK_DIMENSION
 ///     - ::UR_RESULT_ERROR_INVALID_WORK_GROUP_SIZE
 ///     - ::UR_RESULT_ERROR_INVALID_VALUE
+///     - ::UR_RESULT_ERROR_INVALID_KERNEL_ARGS - "The kernel argument values have not been specified."
 ///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
 UR_APIEXPORT ur_result_t UR_APICALL
@@ -5968,6 +6045,8 @@ urEnqueueKernelLaunch(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_VALUE
 ///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
@@ -6012,6 +6091,8 @@ urEnqueueEventsWait(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_VALUE
 ///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
@@ -6055,6 +6136,8 @@ urEnqueueEventsWaitWithBarrier(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
 ///     - ::UR_RESULT_ERROR_INVALID_SIZE
 ///         + If `offset + size` results in an out-of-bounds access.
@@ -6104,6 +6187,8 @@ urEnqueueMemBufferRead(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
 ///     - ::UR_RESULT_ERROR_INVALID_SIZE
 ///         + If `offset + size` results in an out-of-bounds access.
@@ -6156,6 +6241,8 @@ urEnqueueMemBufferWrite(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
 ///     - ::UR_RESULT_ERROR_INVALID_SIZE
 ///         + `region.width == 0 || region.height == 0 || region.width == 0`
@@ -6222,6 +6309,8 @@ urEnqueueMemBufferReadRect(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
 ///     - ::UR_RESULT_ERROR_INVALID_SIZE
 ///         + `region.width == 0 || region.height == 0 || region.width == 0`
@@ -6281,6 +6370,8 @@ urEnqueueMemBufferWriteRect(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
 ///     - ::UR_RESULT_ERROR_INVALID_SIZE
 ///         + If `srcOffset + size` results in an out-of-bounds access.
@@ -6327,6 +6418,8 @@ urEnqueueMemBufferCopy(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
 ///     - ::UR_RESULT_ERROR_INVALID_SIZE
 ///         + `region.width == 0 || region.height == 0 || region.depth == 0`
@@ -6385,6 +6478,8 @@ urEnqueueMemBufferCopyRect(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
 ///     - ::UR_RESULT_ERROR_INVALID_SIZE
 ///         + `patternSize == 0 || size == 0`
@@ -6440,6 +6535,8 @@ urEnqueueMemBufferFill(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
 ///     - ::UR_RESULT_ERROR_INVALID_SIZE
 ///         + `region.width == 0 || region.height == 0 || region.depth == 0`
@@ -6493,6 +6590,8 @@ urEnqueueMemImageRead(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
 ///     - ::UR_RESULT_ERROR_INVALID_SIZE
 ///         + `region.width == 0 || region.height == 0 || region.depth == 0`
@@ -6540,6 +6639,8 @@ urEnqueueMemImageWrite(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
 ///     - ::UR_RESULT_ERROR_INVALID_SIZE
 ///         + `region.width == 0 || region.height == 0 || region.depth == 0`
@@ -6626,6 +6727,8 @@ typedef enum ur_usm_migration_flag_t {
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
 ///     - ::UR_RESULT_ERROR_INVALID_SIZE
 ///         + If `offset + size` results in an out-of-bounds access.
@@ -6674,6 +6777,8 @@ urEnqueueMemBufferMap(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
 ///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
@@ -6716,6 +6821,8 @@ urEnqueueMemUnmap(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
 ///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
@@ -6758,6 +6865,8 @@ urEnqueueUSMFill(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
 ///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
@@ -6805,6 +6914,8 @@ urEnqueueUSMMemcpy(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
 ///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
@@ -6887,6 +6998,8 @@ urEnqueueUSMAdvise(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
 ///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
@@ -6936,6 +7049,8 @@ urEnqueueUSMFill2D(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 ///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
 ///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
@@ -6979,6 +7094,8 @@ urEnqueueUSMMemcpy2D(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 UR_APIEXPORT ur_result_t UR_APICALL
 urEnqueueDeviceGlobalVariableWrite(
     ur_queue_handle_t hQueue,                 ///< [in] handle of the queue to submit to.
@@ -7016,6 +7133,8 @@ urEnqueueDeviceGlobalVariableWrite(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 UR_APIEXPORT ur_result_t UR_APICALL
 urEnqueueDeviceGlobalVariableRead(
     ur_queue_handle_t hQueue,                 ///< [in] handle of the queue to submit to.
@@ -7052,6 +7171,8 @@ urEnqueueDeviceGlobalVariableRead(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 UR_APIEXPORT ur_result_t UR_APICALL
 urEnqueueReadHostPipe(
     ur_queue_handle_t hQueue,                 ///< [in] a valid host command-queue in which the read command
@@ -7090,6 +7211,8 @@ urEnqueueReadHostPipe(
 ///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
 ///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
 ///         + If event objects in phEventWaitList are not valid events.
+///     - ::UR_RESULT_ERROR_IN_EVENT_LIST_EXEC_STATUS
+///         + An event in `phEventWaitList` has ::UR_EVENT_STATUS_ERROR.
 UR_APIEXPORT ur_result_t UR_APICALL
 urEnqueueWriteHostPipe(
     ur_queue_handle_t hQueue,                 ///< [in] a valid host command-queue in which the write command
@@ -7149,6 +7272,17 @@ typedef enum ur_exp_image_copy_flag_t {
 #define UR_EXP_IMAGE_COPY_FLAGS_MASK 0xfffffff8
 
 ///////////////////////////////////////////////////////////////////////////////
+/// @brief Sampler cubemap seamless filtering mode.
+typedef enum ur_exp_sampler_cubemap_filter_mode_t {
+    UR_EXP_SAMPLER_CUBEMAP_FILTER_MODE_DISJOINTED = 0, ///< Disable seamless filtering
+    UR_EXP_SAMPLER_CUBEMAP_FILTER_MODE_SEAMLESS = 1,   ///< Enable Seamless filtering
+    /// @cond
+    UR_EXP_SAMPLER_CUBEMAP_FILTER_MODE_FORCE_UINT32 = 0x7fffffff
+    /// @endcond
+
+} ur_exp_sampler_cubemap_filter_mode_t;
+
+///////////////////////////////////////////////////////////////////////////////
 /// @brief File descriptor
 typedef struct ur_exp_file_descriptor_t {
     ur_structure_type_t stype; ///< [in] type of this structure, must be
@@ -7201,6 +7335,21 @@ typedef struct ur_exp_sampler_addr_modes_t {
     ur_sampler_addressing_mode_t addrModes[3]; ///< [in] Specify the address mode of the sampler per dimension
 
 } ur_exp_sampler_addr_modes_t;
+
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Describes cubemap sampler properties
+///
+/// @details
+///     - Specify these properties in ::urSamplerCreate via ::ur_sampler_desc_t
+///       as part of a `pNext` chain.
+typedef struct ur_exp_sampler_cubemap_properties_t {
+    ur_structure_type_t stype;                              ///< [in] type of this structure, must be
+                                                            ///< ::UR_STRUCTURE_TYPE_EXP_SAMPLER_CUBEMAP_PROPERTIES
+    void *pNext;                                            ///< [in,out][optional] pointer to extension-specific structure
+    ur_exp_sampler_cubemap_filter_mode_t cubemapFilterMode; ///< [in] enables or disables seamless cubemap filtering between cubemap
+                                                            ///< faces
+
+} ur_exp_sampler_cubemap_properties_t;
 
 ///////////////////////////////////////////////////////////////////////////////
 /// @brief Describes an interop memory resource descriptor
@@ -7405,7 +7554,6 @@ urBindlessImagesImageFreeExp(
 ///     - ::UR_RESULT_ERROR_INVALID_NULL_POINTER
 ///         + `NULL == pImageFormat`
 ///         + `NULL == pImageDesc`
-///         + `NULL == phMem`
 ///         + `NULL == phImage`
 ///     - ::UR_RESULT_ERROR_INVALID_CONTEXT
 ///     - ::UR_RESULT_ERROR_INVALID_VALUE
@@ -7420,7 +7568,6 @@ urBindlessImagesUnsampledImageCreateExp(
     ur_exp_image_mem_handle_t hImageMem,   ///< [in] handle to memory from which to create the image
     const ur_image_format_t *pImageFormat, ///< [in] pointer to image format specification
     const ur_image_desc_t *pImageDesc,     ///< [in] pointer to image description
-    ur_mem_handle_t *phMem,                ///< [out] pointer to handle of image object created
     ur_exp_image_handle_t *phImage         ///< [out] pointer to handle of image object created
 );
 
@@ -7444,7 +7591,6 @@ urBindlessImagesUnsampledImageCreateExp(
 ///     - ::UR_RESULT_ERROR_INVALID_NULL_POINTER
 ///         + `NULL == pImageFormat`
 ///         + `NULL == pImageDesc`
-///         + `NULL == phMem`
 ///         + `NULL == phImage`
 ///     - ::UR_RESULT_ERROR_INVALID_CONTEXT
 ///     - ::UR_RESULT_ERROR_INVALID_VALUE
@@ -7461,7 +7607,6 @@ urBindlessImagesSampledImageCreateExp(
     const ur_image_format_t *pImageFormat, ///< [in] pointer to image format specification
     const ur_image_desc_t *pImageDesc,     ///< [in] pointer to image description
     ur_sampler_handle_t hSampler,          ///< [in] sampler to be used
-    ur_mem_handle_t *phMem,                ///< [out] pointer to handle of image object created
     ur_exp_image_handle_t *phImage         ///< [out] pointer to handle of image object created
 );
 
@@ -7855,6 +8000,9 @@ typedef struct ur_exp_command_buffer_desc_t {
                                ///< ::UR_STRUCTURE_TYPE_EXP_COMMAND_BUFFER_DESC
     const void *pNext;         ///< [in][optional] pointer to extension-specific structure
     ur_bool_t isUpdatable;     ///< [in] Commands in a finalized command-buffer can be updated.
+    ur_bool_t isInOrder;       ///< [in] Commands in a command-buffer may be executed in-order without
+                               ///< explicit dependencies.
+    ur_bool_t enableProfiling; ///< [in] Command-buffer profiling is enabled.
 
 } ur_exp_command_buffer_desc_t;
 
@@ -7898,19 +8046,6 @@ typedef struct ur_exp_command_buffer_update_value_arg_desc_t {
 } ur_exp_command_buffer_update_value_arg_desc_t;
 
 ///////////////////////////////////////////////////////////////////////////////
-/// @brief Descriptor type for updating kernel command execution info.
-typedef struct ur_exp_command_buffer_update_exec_info_desc_t {
-    ur_structure_type_t stype;                           ///< [in] type of this structure, must be
-                                                         ///< ::UR_STRUCTURE_TYPE_EXP_COMMAND_BUFFER_UPDATE_EXEC_INFO_DESC
-    const void *pNext;                                   ///< [in][optional] pointer to extension-specific structure
-    ur_kernel_exec_info_t propName;                      ///< [in] Name of execution attribute.
-    size_t propSize;                                     ///< [in] Size of execution attribute.
-    const ur_kernel_exec_info_properties_t *pProperties; ///< [in][optional] Pointer to execution info properties.
-    const void *pNewExecInfo;                            ///< [in] Pointer to memory location holding the execution info value.
-
-} ur_exp_command_buffer_update_exec_info_desc_t;
-
-///////////////////////////////////////////////////////////////////////////////
 /// @brief Descriptor type for updating a kernel launch command.
 typedef struct ur_exp_command_buffer_update_kernel_launch_desc_t {
     ur_structure_type_t stype;                                                 ///< [in] type of this structure, must be
@@ -7919,7 +8054,6 @@ typedef struct ur_exp_command_buffer_update_kernel_launch_desc_t {
     uint32_t numNewMemObjArgs;                                                 ///< [in] Length of pNewMemObjArgList.
     uint32_t numNewPointerArgs;                                                ///< [in] Length of pNewPointerArgList.
     uint32_t numNewValueArgs;                                                  ///< [in] Length of pNewValueArgList.
-    uint32_t numNewExecInfos;                                                  ///< [in] Length of pNewExecInfoList.
     uint32_t newWorkDim;                                                       ///< [in] Number of work dimensions in the kernel ND-range, from 1-3.
     const ur_exp_command_buffer_update_memobj_arg_desc_t *pNewMemObjArgList;   ///< [in][optional][range(0, numNewMemObjArgs)] An array describing the new
                                                                                ///< kernel mem obj arguments for the command.
@@ -7927,16 +8061,16 @@ typedef struct ur_exp_command_buffer_update_kernel_launch_desc_t {
                                                                                ///< new kernel pointer arguments for the command.
     const ur_exp_command_buffer_update_value_arg_desc_t *pNewValueArgList;     ///< [in][optional][range(0, numNewValueArgs)] An array describing the new
                                                                                ///< kernel value arguments for the command.
-    const ur_exp_command_buffer_update_exec_info_desc_t *pNewExecInfoList;     ///< [in][optional][range(0, numNewExecInfos)] An array describing the
-                                                                               ///< execution info objects for the command.
     size_t *pNewGlobalWorkOffset;                                              ///< [in][optional][range(0, newWorkDim)] Array of newWorkDim unsigned
                                                                                ///< values that describe the offset used to calculate the global ID.
     size_t *pNewGlobalWorkSize;                                                ///< [in][optional][range(0, newWorkDim)] Array of newWorkDim unsigned
                                                                                ///< values that describe the number of global work-items.
     size_t *pNewLocalWorkSize;                                                 ///< [in][optional][range(0, newWorkDim)] Array of newWorkDim unsigned
                                                                                ///< values that describe the number of work-items that make up a
-                                                                               ///< work-group. If nullptr, the runtime implementation will choose the
-                                                                               ///< work-group size.
+                                                                               ///< work-group. If newWorkDim is non-zero and pNewLocalWorkSize is
+                                                                               ///< nullptr, then runtime implementation will choose the work-group size.
+                                                                               ///< If newWorkDim is zero and pNewLocalWorkSize is nullptr, then the local
+                                                                               ///< work size is unchanged.
 
 } ur_exp_command_buffer_update_kernel_launch_desc_t;
 
@@ -7971,6 +8105,8 @@ typedef struct ur_exp_command_buffer_command_handle_t_ *ur_exp_command_buffer_co
 ///         + `NULL == phCommandBuffer`
 ///     - ::UR_RESULT_ERROR_INVALID_CONTEXT
 ///     - ::UR_RESULT_ERROR_INVALID_DEVICE
+///     - ::UR_RESULT_ERROR_INVALID_OPERATION
+///         + If `pCommandBufferDesc->isUpdatable` is true and `hDevice` does not support UR_DEVICE_INFO_COMMAND_BUFFER_UPDATE_SUPPORT_EXP.
 ///     - ::UR_RESULT_ERROR_OUT_OF_HOST_MEMORY
 ///     - ::UR_RESULT_ERROR_OUT_OF_RESOURCES
 UR_APIEXPORT ur_result_t UR_APICALL
@@ -8051,7 +8187,6 @@ urCommandBufferFinalizeExp(
 ///     - ::UR_RESULT_ERROR_INVALID_NULL_POINTER
 ///         + `NULL == pGlobalWorkOffset`
 ///         + `NULL == pGlobalWorkSize`
-///         + `NULL == pLocalWorkSize`
 ///     - ::UR_RESULT_ERROR_INVALID_COMMAND_BUFFER_EXP
 ///     - ::UR_RESULT_ERROR_INVALID_KERNEL
 ///     - ::UR_RESULT_ERROR_INVALID_WORK_DIMENSION
@@ -8070,9 +8205,10 @@ urCommandBufferAppendKernelLaunchExp(
     uint32_t workDim,                                             ///< [in] Dimension of the kernel execution.
     const size_t *pGlobalWorkOffset,                              ///< [in] Offset to use when executing kernel.
     const size_t *pGlobalWorkSize,                                ///< [in] Global work size to use when executing kernel.
-    const size_t *pLocalWorkSize,                                 ///< [in] Local work size to use when executing kernel.
+    const size_t *pLocalWorkSize,                                 ///< [in][optional] Local work size to use when executing kernel.
     uint32_t numSyncPointsInWaitList,                             ///< [in] The number of sync points in the provided dependency list.
-    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                                                                  ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *pSyncPoint,               ///< [out][optional] Sync point associated with this command.
     ur_exp_command_buffer_command_handle_t *phCommand             ///< [out][optional] Handle to this command.
 );
@@ -8108,7 +8244,8 @@ urCommandBufferAppendUSMMemcpyExp(
     const void *pSrc,                                             ///< [in] The data to be copied.
     size_t size,                                                  ///< [in] The number of bytes to copy.
     uint32_t numSyncPointsInWaitList,                             ///< [in] The number of sync points in the provided dependency list.
-    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                                                                  ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *pSyncPoint                ///< [out][optional] Sync point associated with this command.
 );
 
@@ -8147,7 +8284,8 @@ urCommandBufferAppendUSMFillExp(
     size_t patternSize,                                           ///< [in] size in bytes of the pattern.
     size_t size,                                                  ///< [in] fill size in bytes, must be a multiple of patternSize.
     uint32_t numSyncPointsInWaitList,                             ///< [in] The number of sync points in the provided dependency list.
-    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                                                                  ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *pSyncPoint                ///< [out][optional] sync point associated with this command.
 );
 
@@ -8180,7 +8318,8 @@ urCommandBufferAppendMemBufferCopyExp(
     size_t dstOffset,                                             ///< [in] Offset into the destination memory
     size_t size,                                                  ///< [in] The number of bytes to be copied.
     uint32_t numSyncPointsInWaitList,                             ///< [in] The number of sync points in the provided dependency list.
-    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                                                                  ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *pSyncPoint                ///< [out][optional] Sync point associated with this command.
 );
 
@@ -8213,7 +8352,8 @@ urCommandBufferAppendMemBufferWriteExp(
     size_t size,                                                  ///< [in] Size in bytes of data being written.
     const void *pSrc,                                             ///< [in] Pointer to host memory where data is to be written from.
     uint32_t numSyncPointsInWaitList,                             ///< [in] The number of sync points in the provided dependency list.
-    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                                                                  ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *pSyncPoint                ///< [out][optional] Sync point associated with this command.
 );
 
@@ -8246,7 +8386,8 @@ urCommandBufferAppendMemBufferReadExp(
     size_t size,                                                  ///< [in] Size in bytes of data being written.
     void *pDst,                                                   ///< [in] Pointer to host memory where data is to be written to.
     uint32_t numSyncPointsInWaitList,                             ///< [in] The number of sync points in the provided dependency list.
-    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                                                                  ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *pSyncPoint                ///< [out][optional] Sync point associated with this command.
 );
 
@@ -8283,7 +8424,8 @@ urCommandBufferAppendMemBufferCopyRectExp(
     size_t dstRowPitch,                                           ///< [in] Row pitch of the destination memory.
     size_t dstSlicePitch,                                         ///< [in] Slice pitch of the destination memory.
     uint32_t numSyncPointsInWaitList,                             ///< [in] The number of sync points in the provided dependency list.
-    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                                                                  ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *pSyncPoint                ///< [out][optional] Sync point associated with this command.
 );
 
@@ -8324,7 +8466,8 @@ urCommandBufferAppendMemBufferWriteRectExp(
                                                                   ///< pointed to by pSrc.
     void *pSrc,                                                   ///< [in] Pointer to host memory where data is to be written from.
     uint32_t numSyncPointsInWaitList,                             ///< [in] The number of sync points in the provided dependency list.
-    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                                                                  ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *pSyncPoint                ///< [out][optional] Sync point associated with this command.
 );
 
@@ -8364,7 +8507,8 @@ urCommandBufferAppendMemBufferReadRectExp(
                                                                   ///< pointed to by pDst.
     void *pDst,                                                   ///< [in] Pointer to host memory where data is to be read into.
     uint32_t numSyncPointsInWaitList,                             ///< [in] The number of sync points in the provided dependency list.
-    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                                                                  ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *pSyncPoint                ///< [out][optional] Sync point associated with this command.
 );
 
@@ -8400,7 +8544,8 @@ urCommandBufferAppendMemBufferFillExp(
     size_t offset,                                                ///< [in] offset into the buffer.
     size_t size,                                                  ///< [in] fill size in bytes, must be a multiple of patternSize.
     uint32_t numSyncPointsInWaitList,                             ///< [in] The number of sync points in the provided dependency list.
-    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                                                                  ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *pSyncPoint                ///< [out][optional] sync point associated with this command.
 );
 
@@ -8441,7 +8586,8 @@ urCommandBufferAppendUSMPrefetchExp(
     size_t size,                                                  ///< [in] size in bytes to be fetched.
     ur_usm_migration_flags_t flags,                               ///< [in] USM prefetch flags
     uint32_t numSyncPointsInWaitList,                             ///< [in] The number of sync points in the provided dependency list.
-    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                                                                  ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *pSyncPoint                ///< [out][optional] sync point associated with this command.
 );
 
@@ -8482,7 +8628,8 @@ urCommandBufferAppendUSMAdviseExp(
     size_t size,                                                  ///< [in] size in bytes to be advised.
     ur_usm_advice_flags_t advice,                                 ///< [in] USM memory advice
     uint32_t numSyncPointsInWaitList,                             ///< [in] The number of sync points in the provided dependency list.
-    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+    const ur_exp_command_buffer_sync_point_t *pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                                                                  ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *pSyncPoint                ///< [out][optional] sync point associated with this command.
 );
 
@@ -8572,6 +8719,10 @@ urCommandBufferReleaseCommandExp(
 ///     - ::UR_RESULT_ERROR_INVALID_OPERATION
 ///         + If ::ur_exp_command_buffer_desc_t::isUpdatable was not set to true on creation of the command buffer `hCommand` belongs to.
 ///         + If the command-buffer `hCommand` belongs to has not been finalized.
+///         + If `pUpdateKernellaunch->newWorkDim` is non-zero and different from the work-dim used on creation of `hCommand`.
+///         + If `pUpdateKernellaunch->newWorkDim` is non-zero and `pUpdateKernelLaunch->pNewLocalWorkSize` is set to a non-NULL value and `pUpdateKernelLaunch->pNewGlobalWorkSize` is NULL.
+///         + If `pUpdateKernellaunch->newWorkDim` is non-zero and `pUpdateKernelLaunch->pNewLocalWorkSize` is set to a non-NULL value when `hCommand` was created with a NULL local work size.
+///         + If `pUpdateKernellaunch->newWorkDim` is non-zero and `pUpdateKernelLaunch->pNewLocalWorkSize` is set to a NULL value when `hCommand` was created with a non-NULL local work size.
 ///     - ::UR_RESULT_ERROR_INVALID_COMMAND_BUFFER_COMMAND_HANDLE_EXP
 ///     - ::UR_RESULT_ERROR_INVALID_MEM_OBJECT
 ///     - ::UR_RESULT_ERROR_INVALID_KERNEL_ARGUMENT_INDEX
@@ -8740,6 +8891,48 @@ urKernelSuggestMaxCooperativeGroupCountExp(
     size_t dynamicSharedMemorySize, ///< [in] size of dynamic shared memory, for each work-group, in bytes,
                                     ///< that will be used when the kernel is launched
     uint32_t *pGroupCountRet        ///< [out] pointer to maximum number of groups
+);
+
+#if !defined(__GNUC__)
+#pragma endregion
+#endif
+// Intel 'oneAPI' Unified Runtime Experimental APIs for enqueuing timestamp recordings
+#if !defined(__GNUC__)
+#pragma region enqueue timestamp recording(experimental)
+#endif
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Enqueue a command for recording the device timestamp
+///
+/// @returns
+///     - ::UR_RESULT_SUCCESS
+///     - ::UR_RESULT_ERROR_UNINITIALIZED
+///     - ::UR_RESULT_ERROR_DEVICE_LOST
+///     - ::UR_RESULT_ERROR_ADAPTER_SPECIFIC
+///     - ::UR_RESULT_ERROR_INVALID_NULL_HANDLE
+///         + `NULL == hQueue`
+///     - ::UR_RESULT_ERROR_INVALID_NULL_POINTER
+///         + `NULL == phEvent`
+///     - ::UR_RESULT_ERROR_INVALID_EVENT_WAIT_LIST
+///         + `phEventWaitList == NULL && numEventsInWaitList > 0`
+///         + `phEventWaitList != NULL && numEventsInWaitList == 0`
+UR_APIEXPORT ur_result_t UR_APICALL
+urEnqueueTimestampRecordingExp(
+    ur_queue_handle_t hQueue,                 ///< [in] handle of the queue object
+    bool blocking,                            ///< [in] indicates whether the call to this function should block until
+                                              ///< until the device timestamp recording command has executed on the
+                                              ///< device.
+    uint32_t numEventsInWaitList,             ///< [in] size of the event wait list
+    const ur_event_handle_t *phEventWaitList, ///< [in][optional][range(0, numEventsInWaitList)] pointer to a list of
+                                              ///< events that must be complete before the kernel execution.
+                                              ///< If nullptr, the numEventsInWaitList must be 0, indicating no wait
+                                              ///< events.
+    ur_event_handle_t *phEvent                ///< [in,out] return an event object that identifies this particular kernel
+                                              ///< execution instance. Profiling information can be queried
+                                              ///< from this event as if `hQueue` had profiling enabled. Querying
+                                              ///< `UR_PROFILING_INFO_COMMAND_QUEUED` or `UR_PROFILING_INFO_COMMAND_SUBMIT`
+                                              ///< reports the timestamp at the time of the call to this function.
+                                              ///< Querying `UR_PROFILING_INFO_COMMAND_START` or `UR_PROFILING_INFO_COMMAND_END`
+                                              ///< reports the timestamp recorded when the command is executed on the device.
 );
 
 #if !defined(__GNUC__)
@@ -8927,6 +9120,13 @@ urUSMReleaseExp(
 #if !defined(__GNUC__)
 #pragma region usm p2p(experimental)
 #endif
+///////////////////////////////////////////////////////////////////////////////
+#ifndef UR_USM_P2P_EXTENSION_STRING_EXP
+/// @brief The extension string that defines support for USM P2P which is
+///        returned when querying device extensions.
+#define UR_USM_P2P_EXTENSION_STRING_EXP "ur_exp_usm_p2p"
+#endif // UR_USM_P2P_EXTENSION_STRING_EXP
+
 ///////////////////////////////////////////////////////////////////////////////
 /// @brief Supported peer info
 typedef enum ur_exp_peer_info_t {
@@ -9462,6 +9662,18 @@ typedef struct ur_program_get_function_pointer_params_t {
     const char **ppFunctionName;
     void ***pppFunctionPointer;
 } ur_program_get_function_pointer_params_t;
+
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Function parameters for urProgramGetGlobalVariablePointer
+/// @details Each entry is a pointer to the parameter passed to the function;
+///     allowing the callback the ability to modify the parameter's value
+typedef struct ur_program_get_global_variable_pointer_params_t {
+    ur_device_handle_t *phDevice;
+    ur_program_handle_t *phProgram;
+    const char **ppGlobalVariableName;
+    size_t **ppGlobalVariableSizeRet;
+    void ***pppGlobalVariablePointerRet;
+} ur_program_get_global_variable_pointer_params_t;
 
 ///////////////////////////////////////////////////////////////////////////////
 /// @brief Function parameters for urProgramGetInfo
@@ -10434,6 +10646,18 @@ typedef struct ur_enqueue_cooperative_kernel_launch_exp_params_t {
 } ur_enqueue_cooperative_kernel_launch_exp_params_t;
 
 ///////////////////////////////////////////////////////////////////////////////
+/// @brief Function parameters for urEnqueueTimestampRecordingExp
+/// @details Each entry is a pointer to the parameter passed to the function;
+///     allowing the callback the ability to modify the parameter's value
+typedef struct ur_enqueue_timestamp_recording_exp_params_t {
+    ur_queue_handle_t *phQueue;
+    bool *pblocking;
+    uint32_t *pnumEventsInWaitList;
+    const ur_event_handle_t **pphEventWaitList;
+    ur_event_handle_t **pphEvent;
+} ur_enqueue_timestamp_recording_exp_params_t;
+
+///////////////////////////////////////////////////////////////////////////////
 /// @brief Function parameters for urBindlessImagesUnsampledImageHandleDestroyExp
 /// @details Each entry is a pointer to the parameter passed to the function;
 ///     allowing the callback the ability to modify the parameter's value
@@ -10485,7 +10709,6 @@ typedef struct ur_bindless_images_unsampled_image_create_exp_params_t {
     ur_exp_image_mem_handle_t *phImageMem;
     const ur_image_format_t **ppImageFormat;
     const ur_image_desc_t **ppImageDesc;
-    ur_mem_handle_t **pphMem;
     ur_exp_image_handle_t **pphImage;
 } ur_bindless_images_unsampled_image_create_exp_params_t;
 
@@ -10500,7 +10723,6 @@ typedef struct ur_bindless_images_sampled_image_create_exp_params_t {
     const ur_image_format_t **ppImageFormat;
     const ur_image_desc_t **ppImageDesc;
     ur_sampler_handle_t *phSampler;
-    ur_mem_handle_t **pphMem;
     ur_exp_image_handle_t **pphImage;
 } ur_bindless_images_sampled_image_create_exp_params_t;
 

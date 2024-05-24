@@ -15,6 +15,7 @@
 #include "adapter.hpp"
 #include "context.hpp"
 #include "device.hpp"
+#include "logger/ur_logger.hpp"
 #include "platform.hpp"
 #include "ur_util.hpp"
 
@@ -46,7 +47,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGetInfo(ur_device_handle_t hDevice,
 
   static constexpr uint32_t MaxWorkItemDimensions = 3u;
 
-  ScopedContext Active(hDevice->getContext());
+  ScopedContext Active(hDevice);
 
   switch ((uint32_t)propName) {
   case UR_DEVICE_INFO_TYPE: {
@@ -201,6 +202,13 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGetInfo(ur_device_handle_t hDevice,
         UR_MEMORY_ORDER_CAPABILITY_FLAG_ACQUIRE |
         UR_MEMORY_ORDER_CAPABILITY_FLAG_RELEASE |
         UR_MEMORY_ORDER_CAPABILITY_FLAG_ACQ_REL;
+
+    int Major = 0;
+    UR_CHECK_ERROR(cuDeviceGetAttribute(
+        &Major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, hDevice->get()));
+    if (Major >= 7)
+      Capabilities |= UR_MEMORY_ORDER_CAPABILITY_FLAG_SEQ_CST;
+
     return ReturnValue(Capabilities);
   }
   case UR_DEVICE_INFO_ATOMIC_MEMORY_SCOPE_CAPABILITIES: {
@@ -228,6 +236,13 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGetInfo(ur_device_handle_t hDevice,
         UR_MEMORY_ORDER_CAPABILITY_FLAG_ACQUIRE |
         UR_MEMORY_ORDER_CAPABILITY_FLAG_RELEASE |
         UR_MEMORY_ORDER_CAPABILITY_FLAG_ACQ_REL;
+
+    int Major = 0;
+    UR_CHECK_ERROR(cuDeviceGetAttribute(
+        &Major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, hDevice->get()));
+    if (Major >= 7)
+      Capabilities |= UR_MEMORY_ORDER_CAPABILITY_FLAG_SEQ_CST;
+
     return ReturnValue(Capabilities);
   }
   case UR_DEVICE_INFO_ATOMIC_FENCE_SCOPE_CAPABILITIES: {
@@ -279,7 +294,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGetInfo(ur_device_handle_t hDevice,
         std::getenv("UR_CUDA_ENABLE_IMAGE_SUPPORT") != nullptr) {
       Enabled = true;
     } else {
-      detail::ur::cuPrint(
+      logger::always(
           "Images are not fully supported by the CUDA BE, their support is "
           "disabled by default. Their partial support can be activated by "
           "setting SYCL_PI_CUDA_ENABLE_IMAGE_SUPPORT environment variable at "
@@ -612,6 +627,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGetInfo(ur_device_handle_t hDevice,
     SupportedExtensions += "pi_ext_intel_devicelib_assert ";
     // Return supported for the UR command-buffer experimental feature
     SupportedExtensions += "ur_exp_command_buffer ";
+    SupportedExtensions += "ur_exp_usm_p2p ";
     SupportedExtensions += " ";
 
     int Major = 0;
@@ -902,6 +918,42 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGetInfo(ur_device_handle_t hDevice,
     // CUDA does not support exporting semaphores or events.
     return ReturnValue(false);
   }
+  case UR_DEVICE_INFO_CUBEMAP_SUPPORT_EXP: {
+    // CUDA supports cubemaps.
+    return ReturnValue(true);
+  }
+  case UR_DEVICE_INFO_CUBEMAP_SEAMLESS_FILTERING_SUPPORT_EXP: {
+    // CUDA supports cubemap seamless filtering.
+    return ReturnValue(true);
+  }
+  case UR_DEVICE_INFO_BINDLESS_SAMPLED_IMAGE_FETCH_1D_USM_EXP: {
+    // CUDA does support fetching 1D USM sampled image data.
+    return ReturnValue(true);
+  }
+  case UR_DEVICE_INFO_BINDLESS_SAMPLED_IMAGE_FETCH_1D_EXP: {
+    // CUDA does not support fetching 1D non-USM sampled image data.
+    return ReturnValue(false);
+  }
+  case UR_DEVICE_INFO_BINDLESS_SAMPLED_IMAGE_FETCH_2D_USM_EXP: {
+    // CUDA does support fetching 2D USM sampled image data.
+    return ReturnValue(true);
+  }
+  case UR_DEVICE_INFO_BINDLESS_SAMPLED_IMAGE_FETCH_2D_EXP: {
+    // CUDA does support fetching 2D non-USM sampled image data.
+    return ReturnValue(true);
+  }
+  case UR_DEVICE_INFO_BINDLESS_SAMPLED_IMAGE_FETCH_3D_USM_EXP: {
+    // CUDA does not support 3D USM sampled textures
+    return ReturnValue(false);
+  }
+  case UR_DEVICE_INFO_BINDLESS_SAMPLED_IMAGE_FETCH_3D_EXP: {
+    // CUDA does support fetching 3D non-USM sampled image data.
+    return ReturnValue(true);
+  }
+  case UR_DEVICE_INFO_TIMESTAMP_RECORDING_SUPPORT_EXP: {
+    // CUDA supports recording timestamp events.
+    return ReturnValue(true);
+  }
   case UR_DEVICE_INFO_DEVICE_ID: {
     int Value = 0;
     UR_CHECK_ERROR(cuDeviceGetAttribute(
@@ -1182,7 +1234,7 @@ ur_result_t UR_APICALL urDeviceGetGlobalTimestamps(ur_device_handle_t hDevice,
                                                    uint64_t *pDeviceTimestamp,
                                                    uint64_t *pHostTimestamp) {
   CUevent Event;
-  ScopedContext Active(hDevice->getContext());
+  ScopedContext Active(hDevice);
 
   if (pDeviceTimestamp) {
     UR_CHECK_ERROR(cuEventCreate(&Event, CU_EVENT_DEFAULT));

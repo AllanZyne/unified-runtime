@@ -39,7 +39,7 @@
  * error is mapped to UR
  */
 #define CL_RETURN_ON_FAILURE_AND_SET_NULL(clCall, outPtr)                      \
-  if (const cl_int cl_result_macro = clCall != CL_SUCCESS) {                   \
+  if (const cl_int cl_result_macro = clCall; cl_result_macro != CL_SUCCESS) {  \
     if (outPtr != nullptr) {                                                   \
       *outPtr = nullptr;                                                       \
     }                                                                          \
@@ -197,6 +197,8 @@ CONSTFIX char SetProgramSpecializationConstantName[] =
     "clSetProgramSpecializationConstant";
 CONSTFIX char GetDeviceFunctionPointerName[] =
     "clGetDeviceFunctionPointerINTEL";
+CONSTFIX char GetDeviceGlobalVariablePointerName[] =
+    "clGetDeviceGlobalVariablePointerINTEL";
 CONSTFIX char EnqueueWriteGlobalVariableName[] =
     "clEnqueueWriteGlobalVariableINTEL";
 CONSTFIX char EnqueueReadGlobalVariableName[] =
@@ -215,12 +217,17 @@ CONSTFIX char CommandCopyBufferRectName[] = "clCommandCopyBufferRectKHR";
 CONSTFIX char CommandFillBufferName[] = "clCommandFillBufferKHR";
 CONSTFIX char EnqueueCommandBufferName[] = "clEnqueueCommandBufferKHR";
 CONSTFIX char GetCommandBufferInfoName[] = "clGetCommandBufferInfoKHR";
+CONSTFIX char UpdateMutableCommandsName[] = "clUpdateMutableCommandsKHR";
 
 #undef CONSTFIX
 
 using clGetDeviceFunctionPointer_fn = CL_API_ENTRY
 cl_int(CL_API_CALL *)(cl_device_id device, cl_program program,
                       const char *FuncName, cl_ulong *ret_ptr);
+
+using clGetDeviceGlobalVariablePointer_fn = CL_API_ENTRY cl_int(CL_API_CALL *)(
+    cl_device_id device, cl_program program, const char *globalVariableName,
+    size_t *globalVariableSizeRet, void **globalVariablePointerRet);
 
 using clEnqueueWriteGlobalVariable_fn = CL_API_ENTRY
 cl_int(CL_API_CALL *)(cl_command_queue, cl_program, const char *, cl_bool,
@@ -305,6 +312,10 @@ using clGetCommandBufferInfoKHR_fn = CL_API_ENTRY cl_int(CL_API_CALL *)(
     cl_command_buffer_khr command_buffer, cl_command_buffer_info_khr param_name,
     size_t param_value_size, void *param_value, size_t *param_value_size_ret);
 
+using clUpdateMutableCommandsKHR_fn = CL_API_ENTRY
+cl_int(CL_API_CALL *)(cl_command_buffer_khr command_buffer,
+                      const cl_mutable_base_config_khr *mutable_config);
+
 template <typename T> struct FuncPtrCache {
   std::map<cl_context, T> Map;
   std::mutex Mutex;
@@ -319,6 +330,8 @@ struct ExtFuncPtrCacheT {
   FuncPtrCache<clDeviceMemAllocINTEL_fn> clDeviceMemAllocINTELCache;
   FuncPtrCache<clSharedMemAllocINTEL_fn> clSharedMemAllocINTELCache;
   FuncPtrCache<clGetDeviceFunctionPointer_fn> clGetDeviceFunctionPointerCache;
+  FuncPtrCache<clGetDeviceGlobalVariablePointer_fn>
+      clGetDeviceGlobalVariablePointerCache;
   FuncPtrCache<clCreateBufferWithPropertiesINTEL_fn>
       clCreateBufferWithPropertiesINTELCache;
   FuncPtrCache<clMemBlockingFreeINTEL_fn> clMemBlockingFreeINTELCache;
@@ -344,6 +357,7 @@ struct ExtFuncPtrCacheT {
   FuncPtrCache<clCommandFillBufferKHR_fn> clCommandFillBufferKHRCache;
   FuncPtrCache<clEnqueueCommandBufferKHR_fn> clEnqueueCommandBufferKHRCache;
   FuncPtrCache<clGetCommandBufferInfoKHR_fn> clGetCommandBufferInfoKHRCache;
+  FuncPtrCache<clUpdateMutableCommandsKHR_fn> clUpdateMutableCommandsKHRCache;
 };
 // A raw pointer is used here since the lifetime of this map has to be tied to
 // piTeardown to avoid issues with static destruction order (a user application
@@ -365,9 +379,9 @@ static ur_result_t getExtFuncFromContext(cl_context Context,
   if (It != FPtrMap.end()) {
     auto F = It->second;
     // if cached that extension is not available return nullptr and
-    // UR_RESULT_ERROR_INVALID_VALUE
+    // UR_RESULT_ERROR_UNSUPPORTED_FEATURE
     *Fptr = F;
-    return F ? UR_RESULT_SUCCESS : UR_RESULT_ERROR_INVALID_VALUE;
+    return F ? UR_RESULT_SUCCESS : UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
   }
 
   cl_uint DeviceCount;
@@ -401,7 +415,7 @@ static ur_result_t getExtFuncFromContext(cl_context Context,
   if (!FuncPtr) {
     // Cache that the extension is not available
     FPtrMap[Context] = nullptr;
-    return UR_RESULT_ERROR_INVALID_VALUE;
+    return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
   }
 
   *Fptr = FuncPtr;
@@ -414,3 +428,6 @@ static ur_result_t getExtFuncFromContext(cl_context Context,
 ur_result_t mapCLErrorToUR(cl_int Result);
 
 ur_result_t getNativeHandle(void *URObj, ur_native_handle_t *NativeHandle);
+
+cl_int deviceSupportsURCommandBufferKernelUpdate(cl_device_id Dev,
+                                                 bool &Result);

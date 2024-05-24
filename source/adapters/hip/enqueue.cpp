@@ -15,10 +15,13 @@
 #include "kernel.hpp"
 #include "memory.hpp"
 #include "queue.hpp"
+#include "ur_api.h"
+
+#include <ur/ur.hpp>
 
 extern size_t imageElementByteSize(hipArray_Format ArrayFormat);
 
-ur_result_t enqueueEventsWait(ur_queue_handle_t, hipStream_t Stream,
+ur_result_t enqueueEventsWait(ur_queue_handle_t Queue, hipStream_t Stream,
                               uint32_t NumEventsInWaitList,
                               const ur_event_handle_t *EventWaitList) {
   if (!EventWaitList) {
@@ -27,8 +30,8 @@ ur_result_t enqueueEventsWait(ur_queue_handle_t, hipStream_t Stream,
   try {
     auto Result = forLatestEvents(
         EventWaitList, NumEventsInWaitList,
-        [Stream](ur_event_handle_t Event) -> ur_result_t {
-          ScopedContext Active(Event->getDevice());
+        [Stream, Queue](ur_event_handle_t Event) -> ur_result_t {
+          ScopedContext Active(Queue->getDevice());
           if (Event->isCompleted() || Event->getStream() == Stream) {
             return UR_RESULT_SUCCESS;
           } else {
@@ -48,23 +51,29 @@ ur_result_t enqueueEventsWait(ur_queue_handle_t, hipStream_t Stream,
   }
 }
 
-void simpleGuessLocalWorkSize(size_t *ThreadsPerBlock,
-                              const size_t *GlobalWorkSize,
-                              const size_t MaxThreadsPerBlock[3],
-                              ur_kernel_handle_t Kernel) {
+// Determine local work sizes that result in uniform work groups.
+// The default threadsPerBlock only require handling the first work_dim
+// dimension.
+void guessLocalWorkSize(ur_device_handle_t Device, size_t *ThreadsPerBlock,
+                        const size_t *GlobalWorkSize, const uint32_t WorkDim,
+                        const size_t MaxThreadsPerBlock[3]) {
   assert(ThreadsPerBlock != nullptr);
   assert(GlobalWorkSize != nullptr);
-  assert(Kernel != nullptr);
 
-  std::ignore = Kernel;
-
-  ThreadsPerBlock[0] = std::min(MaxThreadsPerBlock[0], GlobalWorkSize[0]);
-
-  // Find a local work group size that is a divisor of the global
-  // work group size to produce uniform work groups.
-  while (GlobalWorkSize[0] % ThreadsPerBlock[0]) {
-    --ThreadsPerBlock[0];
+  // FIXME: The below assumes a three dimensional range but this is not
+  // guaranteed by UR.
+  size_t GlobalSizeNormalized[3] = {1, 1, 1};
+  for (uint32_t i = 0; i < WorkDim; i++) {
+    GlobalSizeNormalized[i] = GlobalWorkSize[i];
   }
+
+  size_t MaxBlockDim[3];
+  MaxBlockDim[0] = MaxThreadsPerBlock[0];
+  MaxBlockDim[1] = Device->getMaxBlockDimY();
+  MaxBlockDim[2] = Device->getMaxBlockDimZ();
+
+  roundToHighestFactorOfGlobalSizeIn3d(ThreadsPerBlock, GlobalSizeNormalized,
+                                       MaxBlockDim, MaxThreadsPerBlock[0]);
 }
 
 namespace {
@@ -210,8 +219,11 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueMemBufferRead(
     // last queue to write to the MemBuffer, meaning we must perform the copy
     // from a different device
     if (hBuffer->LastEventWritingToMemObj &&
-        hBuffer->LastEventWritingToMemObj->getDevice() != hQueue->getDevice()) {
-      Device = hBuffer->LastEventWritingToMemObj->getDevice();
+        hBuffer->LastEventWritingToMemObj->getQueue()->getDevice() !=
+            hQueue->getDevice()) {
+      // This event is never created with interop so getQueue is never null
+      hQueue = hBuffer->LastEventWritingToMemObj->getQueue();
+      Device = hQueue->getDevice();
       ScopedContext Active(Device);
       HIPStream = hipStream_t{0}; // Default stream for different device
       // We may have to wait for an event on another queue if it is the last
@@ -576,8 +588,11 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueMemBufferReadRect(
     // last queue to write to the MemBuffer, meaning we must perform the copy
     // from a different device
     if (hBuffer->LastEventWritingToMemObj &&
-        hBuffer->LastEventWritingToMemObj->getDevice() != hQueue->getDevice()) {
-      Device = hBuffer->LastEventWritingToMemObj->getDevice();
+        hBuffer->LastEventWritingToMemObj->getQueue()->getDevice() !=
+            hQueue->getDevice()) {
+      // This event is never created with interop so getQueue is never null
+      hQueue = hBuffer->LastEventWritingToMemObj->getQueue();
+      Device = hQueue->getDevice();
       ScopedContext Active(Device);
       HIPStream = hipStream_t{0}; // Default stream for different device
       // We may have to wait for an event on another queue if it is the last
@@ -761,29 +776,19 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueMemBufferCopyRect(
   return Result;
 }
 
-// HIP has no memset functions that allow setting values more than 4 bytes. UR
-// API lets you pass an arbitrary "pattern" to the buffer fill, which can be
-// more than 4 bytes. We must break up the pattern into 1 byte values, and set
-// the buffer using multiple strided calls.  The first 4 patterns are set using
-// hipMemsetD32Async then all subsequent 1 byte patterns are set using
-// hipMemset2DAsync which is called for each pattern.
-ur_result_t commonMemSetLargePattern(hipStream_t Stream, uint32_t PatternSize,
-                                     size_t Size, const void *pPattern,
-                                     hipDeviceptr_t Ptr) {
-  // Calculate the number of patterns, stride, number of times the pattern
-  // needs to be applied, and the number of times the first 32 bit pattern
-  // needs to be applied.
+static inline void memsetRemainPattern(hipStream_t Stream, uint32_t PatternSize,
+                                       size_t Size, const void *pPattern,
+                                       hipDeviceptr_t Ptr) {
+
+  // Calculate the number of patterns, stride and the number of times the
+  // pattern needs to be applied.
   auto NumberOfSteps = PatternSize / sizeof(uint8_t);
   auto Pitch = NumberOfSteps * sizeof(uint8_t);
   auto Height = Size / NumberOfSteps;
-  auto Count32 = Size / sizeof(uint32_t);
 
-  // Get 4-byte chunk of the pattern and call hipMemsetD32Async
-  auto Value = *(static_cast<const uint32_t *>(pPattern));
-  UR_CHECK_ERROR(hipMemsetD32Async(Ptr, Value, Count32, Stream));
   for (auto step = 4u; step < NumberOfSteps; ++step) {
     // take 1 byte of the pattern
-    Value = *(static_cast<const uint8_t *>(pPattern) + step);
+    auto Value = *(static_cast<const uint8_t *>(pPattern) + step);
 
     // offset the pointer to the part of the buffer we want to write to
     auto OffsetPtr = reinterpret_cast<void *>(reinterpret_cast<uint8_t *>(Ptr) +
@@ -793,6 +798,55 @@ ur_result_t commonMemSetLargePattern(hipStream_t Stream, uint32_t PatternSize,
     UR_CHECK_ERROR(hipMemset2DAsync(OffsetPtr, Pitch, Value, sizeof(uint8_t),
                                     Height, Stream));
   }
+}
+
+// HIP has no memset functions that allow setting values more than 4 bytes. UR
+// API lets you pass an arbitrary "pattern" to the buffer fill, which can be
+// more than 4 bytes. We must break up the pattern into 1 byte values, and set
+// the buffer using multiple strided calls.  The first 4 patterns are set using
+// hipMemsetD32Async then all subsequent 1 byte patterns are set using
+// hipMemset2DAsync which is called for each pattern.
+ur_result_t commonMemSetLargePattern(hipStream_t Stream, uint32_t PatternSize,
+                                     size_t Size, const void *pPattern,
+                                     hipDeviceptr_t Ptr) {
+
+  // Get 4-byte chunk of the pattern and call hipMemsetD32Async
+  auto Count32 = Size / sizeof(uint32_t);
+  auto Value = *(static_cast<const uint32_t *>(pPattern));
+  UR_CHECK_ERROR(hipMemsetD32Async(Ptr, Value, Count32, Stream));
+
+  // There is a bug in ROCm prior to 6.0.0 version which causes hipMemset2D
+  // to behave incorrectly when acting on host pinned memory.
+  // In such a case, the memset operation is partially emulated with memcpy.
+#if HIP_VERSION_MAJOR < 6
+  hipPointerAttribute_t ptrAttribs{};
+  UR_CHECK_ERROR(hipPointerGetAttributes(&ptrAttribs, (const void *)Ptr));
+
+  // The hostPointer attribute is non-null also for shared memory allocations.
+  // To make sure that this workaround only executes for host pinned memory, we
+  // need to check that isManaged attribute is false.
+  if (ptrAttribs.hostPointer && !ptrAttribs.isManaged) {
+    const auto NumOfCopySteps = Size / PatternSize;
+    const auto Offset = sizeof(uint32_t);
+    const auto LeftPatternSize = PatternSize - Offset;
+    const auto OffsetPatternPtr = reinterpret_cast<const void *>(
+        reinterpret_cast<const uint8_t *>(pPattern) + Offset);
+
+    // Loop through the memory area to memset, advancing each time by the
+    // PatternSize and memcpy the left over pattern bits.
+    for (uint32_t i = 0; i < NumOfCopySteps; ++i) {
+      auto OffsetDstPtr = reinterpret_cast<void *>(
+          reinterpret_cast<uint8_t *>(Ptr) + Offset + i * PatternSize);
+      UR_CHECK_ERROR(hipMemcpyAsync(OffsetDstPtr, OffsetPatternPtr,
+                                    LeftPatternSize, hipMemcpyHostToHost,
+                                    Stream));
+    }
+  } else {
+    memsetRemainPattern(Stream, PatternSize, Size, pPattern, Ptr);
+  }
+#else
+  memsetRemainPattern(Stream, PatternSize, Size, pPattern, Ptr);
+#endif
   return UR_RESULT_SUCCESS;
 }
 
@@ -970,8 +1024,10 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueMemImageRead(
     // last queue to write to the MemBuffer, meaning we must perform the copy
     // from a different device
     if (hImage->LastEventWritingToMemObj &&
-        hImage->LastEventWritingToMemObj->getDevice() != hQueue->getDevice()) {
-      Device = hImage->LastEventWritingToMemObj->getDevice();
+        hImage->LastEventWritingToMemObj->getQueue()->getDevice() !=
+            hQueue->getDevice()) {
+      hQueue = hImage->LastEventWritingToMemObj->getQueue();
+      Device = hQueue->getDevice();
       ScopedContext Active(Device);
       HIPStream = hipStream_t{0}; // Default stream for different device
       // We may have to wait for an event on another queue if it is the last
@@ -1184,49 +1240,42 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueMemBufferMap(
   UR_ASSERT(offset + size <= BufferImpl.getSize(),
             UR_RESULT_ERROR_INVALID_SIZE);
 
-  ur_result_t Result = UR_RESULT_ERROR_INVALID_OPERATION;
+  auto MapPtr = BufferImpl.mapToPtr(size, offset, mapFlags);
+  if (!MapPtr) {
+    return UR_RESULT_ERROR_INVALID_MEM_OBJECT;
+  }
+
   const bool IsPinned =
       BufferImpl.MemAllocMode == BufferMem::AllocMode::AllocHostPtr;
 
-  // Currently no support for overlapping regions
-  if (BufferImpl.getMapPtr() != nullptr) {
-    return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
-  }
+  try {
+    if (!IsPinned && (mapFlags & (UR_MAP_FLAG_READ | UR_MAP_FLAG_WRITE))) {
+      // Pinned host memory is already on host so it doesn't need to be read.
+      UR_CHECK_ERROR(urEnqueueMemBufferRead(
+          hQueue, hBuffer, blockingMap, offset, size, MapPtr,
+          numEventsInWaitList, phEventWaitList, phEvent));
+    } else {
+      ScopedContext Active(hQueue->getDevice());
 
-  // Allocate a pointer in the host to store the mapped information
-  auto HostPtr = BufferImpl.mapToPtr(size, offset, mapFlags);
-  *ppRetMap = std::get<BufferMem>(hBuffer->Mem).getMapPtr();
-  if (HostPtr) {
-    Result = UR_RESULT_SUCCESS;
-  }
+      if (IsPinned) {
+        UR_CHECK_ERROR(urEnqueueEventsWait(hQueue, numEventsInWaitList,
+                                           phEventWaitList, nullptr));
+      }
 
-  if (!IsPinned &&
-      ((mapFlags & UR_MAP_FLAG_READ) || (mapFlags & UR_MAP_FLAG_WRITE))) {
-    // Pinned host memory is already on host so it doesn't need to be read.
-    Result = urEnqueueMemBufferRead(hQueue, hBuffer, blockingMap, offset, size,
-                                    HostPtr, numEventsInWaitList,
-                                    phEventWaitList, phEvent);
-  } else {
-    ScopedContext Active(hQueue->getDevice());
-
-    if (IsPinned) {
-      Result = urEnqueueEventsWait(hQueue, numEventsInWaitList, phEventWaitList,
-                                   nullptr);
-    }
-
-    if (phEvent) {
-      try {
+      if (phEvent) {
         *phEvent = ur_event_handle_t_::makeNative(
             UR_COMMAND_MEM_BUFFER_MAP, hQueue, hQueue->getNextTransferStream());
         UR_CHECK_ERROR((*phEvent)->start());
         UR_CHECK_ERROR((*phEvent)->record());
-      } catch (ur_result_t Error) {
-        Result = Error;
       }
     }
+  } catch (ur_result_t Error) {
+    return Error;
   }
 
-  return Result;
+  *ppRetMap = MapPtr;
+
+  return UR_RESULT_SUCCESS;
 }
 
 /// Implements the unmap from the host, using a BufferWrite operation.
@@ -1237,47 +1286,44 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueMemUnmap(
     ur_queue_handle_t hQueue, ur_mem_handle_t hMem, void *pMappedPtr,
     uint32_t numEventsInWaitList, const ur_event_handle_t *phEventWaitList,
     ur_event_handle_t *phEvent) {
-  ur_result_t Result = UR_RESULT_SUCCESS;
   UR_ASSERT(hMem->isBuffer(), UR_RESULT_ERROR_INVALID_MEM_OBJECT);
-  UR_ASSERT(std::get<BufferMem>(hMem->Mem).getMapPtr() != nullptr,
-            UR_RESULT_ERROR_INVALID_MEM_OBJECT);
-  UR_ASSERT(std::get<BufferMem>(hMem->Mem).getMapPtr() == pMappedPtr,
-            UR_RESULT_ERROR_INVALID_MEM_OBJECT);
+  auto &BufferImpl = std::get<BufferMem>(hMem->Mem);
 
-  const bool IsPinned = std::get<BufferMem>(hMem->Mem).MemAllocMode ==
-                        BufferMem::AllocMode::AllocHostPtr;
+  auto *Map = BufferImpl.getMapDetails(pMappedPtr);
+  UR_ASSERT(Map != nullptr, UR_RESULT_ERROR_INVALID_MEM_OBJECT);
 
-  if (!IsPinned &&
-      ((std::get<BufferMem>(hMem->Mem).getMapFlags() & UR_MAP_FLAG_WRITE) ||
-       (std::get<BufferMem>(hMem->Mem).getMapFlags() &
-        UR_MAP_FLAG_WRITE_INVALIDATE_REGION))) {
-    // Pinned host memory is only on host so it doesn't need to be written to.
-    Result = urEnqueueMemBufferWrite(
-        hQueue, hMem, true, std::get<BufferMem>(hMem->Mem).getMapOffset(),
-        std::get<BufferMem>(hMem->Mem).getMapSize(), pMappedPtr,
-        numEventsInWaitList, phEventWaitList, phEvent);
-  } else {
-    ScopedContext Active(hQueue->getDevice());
+  const bool IsPinned =
+      BufferImpl.MemAllocMode == BufferMem::AllocMode::AllocHostPtr;
 
-    if (IsPinned) {
-      Result = urEnqueueEventsWait(hQueue, numEventsInWaitList, phEventWaitList,
-                                   nullptr);
-    }
+  try {
+    if (!IsPinned &&
+        (Map->getMapFlags() &
+         (UR_MAP_FLAG_WRITE | UR_MAP_FLAG_WRITE_INVALIDATE_REGION))) {
+      // Pinned host memory is only on host so it doesn't need to be written to.
+      UR_CHECK_ERROR(urEnqueueMemBufferWrite(
+          hQueue, hMem, true, Map->getMapOffset(), Map->getMapSize(),
+          pMappedPtr, numEventsInWaitList, phEventWaitList, phEvent));
+    } else {
+      ScopedContext Active(hQueue->getDevice());
 
-    if (phEvent) {
-      try {
+      if (IsPinned) {
+        UR_CHECK_ERROR(urEnqueueEventsWait(hQueue, numEventsInWaitList,
+                                           phEventWaitList, nullptr));
+      }
+
+      if (phEvent) {
         *phEvent = ur_event_handle_t_::makeNative(
             UR_COMMAND_MEM_UNMAP, hQueue, hQueue->getNextTransferStream());
         UR_CHECK_ERROR((*phEvent)->start());
         UR_CHECK_ERROR((*phEvent)->record());
-      } catch (ur_result_t Error) {
-        Result = Error;
       }
     }
+  } catch (ur_result_t Error) {
+    return Error;
   }
 
-  std::get<BufferMem>(hMem->Mem).unmap(pMappedPtr);
-  return Result;
+  BufferImpl.unmap(pMappedPtr);
+  return UR_RESULT_SUCCESS;
 }
 
 UR_APIEXPORT ur_result_t UR_APICALL urEnqueueUSMFill(
@@ -1610,25 +1656,57 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueUSMMemcpy2D(
     hipPointerAttribute_t srcAttribs{};
     hipPointerAttribute_t dstAttribs{};
 
+    // Determine if pSrc and/or pDst are system allocated pageable host memory.
     bool srcIsSystemAlloc{false};
     bool dstIsSystemAlloc{false};
 
     hipError_t hipRes{};
-    // hipErrorInvalidValue returned from hipPointerGetAttributes for a non-null
-    // pointer refers to an OS-allocation, hence pageable host memory. However,
-    // this means we cannot rely on the attributes result, hence we mark system
-    // pageable memory allocation manually as host memory. The HIP runtime can
-    // handle the registering/unregistering of the memory as long as the right
-    // copy-kind (direction) is provided to hipMemcpy2DAsync for this case.
-    hipRes = hipPointerGetAttributes(&srcAttribs, (const void *)pSrc);
+    // Error code hipErrorInvalidValue returned from hipPointerGetAttributes
+    // for a non-null pointer refers to an OS-allocation, hence we can work
+    // with the assumption that this is a pointer to a pageable host memory.
+    // Since ROCm version 6.0.0, the enum hipMemoryType can also be marked as
+    // hipMemoryTypeUnregistered explicitly to relay that information better.
+    // This means we cannot rely on any attribute result, hence we just mark
+    // the pointer handle as system allocated pageable host memory.
+    // The HIP runtime can handle the registering/unregistering of the memory
+    // as long as the right copy-kind (direction) is provided to hipMemcpy2D*.
+    hipRes = hipPointerGetAttributes(&srcAttribs, pSrc);
     if (hipRes == hipErrorInvalidValue && pSrc)
       srcIsSystemAlloc = true;
     hipRes = hipPointerGetAttributes(&dstAttribs, (const void *)pDst);
     if (hipRes == hipErrorInvalidValue && pDst)
       dstIsSystemAlloc = true;
+#if HIP_VERSION_MAJOR >= 6
+    srcIsSystemAlloc |= srcAttribs.type == hipMemoryTypeUnregistered;
+    dstIsSystemAlloc |= dstAttribs.type == hipMemoryTypeUnregistered;
+#endif
 
-    const unsigned int srcMemType{srcAttribs.type};
-    const unsigned int dstMemType{dstAttribs.type};
+    unsigned int srcMemType{srcAttribs.type};
+    unsigned int dstMemType{dstAttribs.type};
+
+    // ROCm 5.7.1 finally started updating the type attribute member to
+    // hipMemoryTypeManaged for shared memory allocations(hipMallocManaged).
+    // Hence, we use a separate query that verifies the pointer use via flags.
+#if HIP_VERSION >= 50700001
+    // Determine the source/destination memory type for shared allocations.
+    //
+    // NOTE: The hipPointerGetAttribute API is marked as [BETA] and fails with
+    // exit code -11 when passing a system allocated pointer to it.
+    if (!srcIsSystemAlloc && srcAttribs.isManaged) {
+      UR_ASSERT(srcAttribs.hostPointer && srcAttribs.devicePointer,
+                UR_RESULT_ERROR_INVALID_VALUE);
+      UR_CHECK_ERROR(hipPointerGetAttribute(
+          &srcMemType, HIP_POINTER_ATTRIBUTE_MEMORY_TYPE,
+          reinterpret_cast<hipDeviceptr_t>(const_cast<void *>(pSrc))));
+    }
+    if (!dstIsSystemAlloc && dstAttribs.isManaged) {
+      UR_ASSERT(dstAttribs.hostPointer && dstAttribs.devicePointer,
+                UR_RESULT_ERROR_INVALID_VALUE);
+      UR_CHECK_ERROR(
+          hipPointerGetAttribute(&dstMemType, HIP_POINTER_ATTRIBUTE_MEMORY_TYPE,
+                                 reinterpret_cast<hipDeviceptr_t>(pDst)));
+    }
+#endif
 
     const bool srcIsHost{(srcMemType == hipMemoryTypeHost) || srcIsSystemAlloc};
     const bool srcIsDevice{srcMemType == hipMemoryTypeDevice};
@@ -1677,19 +1755,12 @@ ur_result_t deviceGlobalCopyHelper(
     bool blocking, size_t count, size_t offset, void *ptr,
     uint32_t numEventsInWaitList, const ur_event_handle_t *phEventWaitList,
     ur_event_handle_t *phEvent, GlobalVariableCopy CopyType) {
-  // Since HIP requires a the global variable to be referenced by name, we use
-  // metadata to find the correct name to access it by.
-  auto DeviceGlobalNameIt = hProgram->GlobalIDMD.find(name);
-  if (DeviceGlobalNameIt == hProgram->GlobalIDMD.end())
-    return UR_RESULT_ERROR_INVALID_VALUE;
-  std::string DeviceGlobalName = DeviceGlobalNameIt->second;
 
   try {
-    hipDeviceptr_t DeviceGlobal = 0;
+    hipDeviceptr_t DeviceGlobal = nullptr;
     size_t DeviceGlobalSize = 0;
-    UR_CHECK_ERROR(hipModuleGetGlobal(&DeviceGlobal, &DeviceGlobalSize,
-                                      hProgram->get(),
-                                      DeviceGlobalName.c_str()));
+    UR_CHECK_ERROR(hProgram->getGlobalVariablePointer(name, &DeviceGlobal,
+                                                      &DeviceGlobalSize));
 
     if (offset + count > DeviceGlobalSize)
       return UR_RESULT_ERROR_INVALID_VALUE;
@@ -1770,10 +1841,14 @@ setKernelParams(const ur_device_handle_t Device, const uint32_t WorkDim,
           static_cast<size_t>(Device->getMaxBlockDimY()),
           static_cast<size_t>(Device->getMaxBlockDimZ())};
 
+      auto &ReqdThreadsPerBlock = Kernel->ReqdThreadsPerBlock;
       MaxWorkGroupSize = Device->getMaxWorkGroupSize();
 
       if (LocalWorkSize != nullptr) {
         auto isValid = [&](int dim) {
+          UR_ASSERT(ReqdThreadsPerBlock[dim] == 0 ||
+                        LocalWorkSize[dim] == ReqdThreadsPerBlock[dim],
+                    UR_RESULT_ERROR_INVALID_WORK_GROUP_SIZE);
           UR_ASSERT(LocalWorkSize[dim] <= MaxThreadsPerBlock[dim],
                     UR_RESULT_ERROR_INVALID_WORK_GROUP_SIZE);
           // Checks that local work sizes are a divisor of the global work sizes
@@ -1793,8 +1868,8 @@ setKernelParams(const ur_device_handle_t Device, const uint32_t WorkDim,
             return err;
         }
       } else {
-        simpleGuessLocalWorkSize(ThreadsPerBlock, GlobalWorkSize,
-                                 MaxThreadsPerBlock, Kernel);
+        guessLocalWorkSize(Device, ThreadsPerBlock, GlobalWorkSize, WorkDim,
+                           MaxThreadsPerBlock);
       }
     }
 
@@ -1894,4 +1969,37 @@ void setCopyRectParams(ur_rect_region_t Region, const void *SrcPtr,
                                                        : hipMemcpyDeviceToHost)
                      : (DstType == hipMemoryTypeDevice ? hipMemcpyHostToDevice
                                                        : hipMemcpyHostToHost));
+}
+
+UR_APIEXPORT ur_result_t UR_APICALL urEnqueueTimestampRecordingExp(
+    ur_queue_handle_t hQueue, bool blocking, uint32_t numEventsInWaitList,
+    const ur_event_handle_t *phEventWaitList, ur_event_handle_t *phEvent) {
+
+  ur_result_t Result = UR_RESULT_SUCCESS;
+  std::unique_ptr<ur_event_handle_t_> RetImplEvent{nullptr};
+  try {
+    ScopedContext Active(hQueue->getDevice());
+
+    uint32_t StreamToken;
+    ur_stream_quard Guard;
+    hipStream_t HIPStream = hQueue->getNextComputeStream(
+        numEventsInWaitList, phEventWaitList, Guard, &StreamToken);
+    UR_CHECK_ERROR(enqueueEventsWait(hQueue, HIPStream, numEventsInWaitList,
+                                     phEventWaitList));
+
+    RetImplEvent =
+        std::unique_ptr<ur_event_handle_t_>(ur_event_handle_t_::makeNative(
+            UR_COMMAND_TIMESTAMP_RECORDING_EXP, hQueue, HIPStream));
+    UR_CHECK_ERROR(RetImplEvent->start());
+    UR_CHECK_ERROR(RetImplEvent->record());
+
+    if (blocking) {
+      UR_CHECK_ERROR(hipStreamSynchronize(HIPStream));
+    }
+
+    *phEvent = RetImplEvent.release();
+  } catch (ur_result_t Err) {
+    Result = Err;
+  }
+  return Result;
 }

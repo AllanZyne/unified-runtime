@@ -539,8 +539,20 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGetInfo(ur_device_handle_t hDevice,
     // native asserts are in progress
     std::string SupportedExtensions = "";
     SupportedExtensions += "pi_ext_intel_devicelib_assert ";
-    // Return supported for the UR command-buffer experimental feature
-    SupportedExtensions += "ur_exp_command_buffer ";
+
+    int RuntimeVersion = 0;
+    UR_CHECK_ERROR(hipRuntimeGetVersion(&RuntimeVersion));
+
+    // Return supported for the UR command-buffer experimental feature on
+    // ROCM 5.5.1 and later. This is to workaround HIP driver bug
+    // https://github.com/ROCm/HIP/issues/2450 in older versions.
+    //
+    // The version is returned as (10000000 major + 1000000 minor + patch).
+    const int CmdBufDriverMinVersion = 50530202; // ROCM 5.5.1
+    if (RuntimeVersion >= CmdBufDriverMinVersion) {
+      SupportedExtensions += "ur_exp_command_buffer ";
+    }
+
     SupportedExtensions += " ";
 
     hipDeviceProp_t Props;
@@ -712,11 +724,20 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGetInfo(ur_device_handle_t hDevice,
   }
 
   case UR_DEVICE_INFO_GLOBAL_MEM_FREE: {
+    // Work around an issue on some (unsupported) architectures,
+    // where hipMemGetInfo fails internally and returns hipErrorInvalidValue
+    // when trying to query the amount of available global memory. Since we
+    // can't distinguish this condition from us doing something wrong, we can't
+    // handle it gracefully.
+    hipDeviceProp_t Props;
+    UR_CHECK_ERROR(hipGetDeviceProperties(&Props, hDevice->get()));
+    if (strcmp(Props.gcnArchName, "gfx1031") == 0) {
+      return ReturnValue(size_t{0});
+    }
+
     size_t FreeMemory = 0;
     size_t TotalMemory = 0;
-    detail::ur::assertion(hipMemGetInfo(&FreeMemory, &TotalMemory) ==
-                              hipSuccess,
-                          "failed hipMemGetInfo() API.");
+    UR_CHECK_ERROR(hipMemGetInfo(&FreeMemory, &TotalMemory));
     return ReturnValue(FreeMemory);
   }
 
@@ -829,6 +850,8 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGetInfo(ur_device_handle_t hDevice,
   case UR_DEVICE_INFO_COMPOSITE_DEVICE:
     // These two are exclusive of L0.
     return ReturnValue(0);
+  case UR_DEVICE_INFO_TIMESTAMP_RECORDING_SUPPORT_EXP:
+    return ReturnValue(true);
 
   // TODO: Investigate if this information is available on HIP.
   case UR_DEVICE_INFO_GPU_EU_COUNT:
@@ -844,9 +867,18 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGetInfo(ur_device_handle_t hDevice,
     return UR_RESULT_ERROR_UNSUPPORTED_ENUMERATION;
 
   case UR_DEVICE_INFO_COMMAND_BUFFER_SUPPORT_EXP:
-  case UR_DEVICE_INFO_COMMAND_BUFFER_UPDATE_SUPPORT_EXP:
-    return ReturnValue(true);
+  case UR_DEVICE_INFO_COMMAND_BUFFER_UPDATE_SUPPORT_EXP: {
+    int DriverVersion = 0;
+    UR_CHECK_ERROR(hipDriverGetVersion(&DriverVersion));
 
+    // Return supported for the UR command-buffer experimental feature on
+    // ROCM 5.5.1 and later. This is to workaround HIP driver bug
+    // https://github.com/ROCm/HIP/issues/2450 in older versions.
+    //
+    // The version is returned as (10000000 major + 1000000 minor + patch).
+    const int CmdBufDriverMinVersion = 50530202; // ROCM 5.5.1
+    return ReturnValue(DriverVersion >= CmdBufDriverMinVersion);
+  }
   default:
     break;
   }

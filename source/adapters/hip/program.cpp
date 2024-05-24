@@ -9,6 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "program.hpp"
+#include "ur_util.hpp"
 
 #ifdef SYCL_ENABLE_KERNEL_FUSION
 #ifdef UR_COMGR_VERSION4_INCLUDE
@@ -78,15 +79,6 @@ void getCoMgrBuildLog(const amd_comgr_data_set_t BuildDataSet, char *BuildLog,
 } // namespace
 #endif
 
-std::pair<std::string, std::string>
-splitMetadataName(const std::string &metadataName) {
-  size_t splitPos = metadataName.rfind('@');
-  if (splitPos == std::string::npos)
-    return std::make_pair(metadataName, std::string{});
-  return std::make_pair(metadataName.substr(0, splitPos),
-                        metadataName.substr(splitPos, metadataName.length()));
-}
-
 ur_result_t
 ur_program_handle_t_::setMetadata(const ur_program_metadata_t *Metadata,
                                   size_t Length) {
@@ -107,8 +99,29 @@ ur_program_handle_t_::setMetadata(const ur_program_metadata_t *Metadata,
       const char *MetadataValPtrEnd =
           MetadataValPtr + MetadataElement.size - sizeof(std::uint64_t);
       GlobalIDMD[Prefix] = std::string{MetadataValPtr, MetadataValPtrEnd};
+    } else if (Tag == __SYCL_UR_PROGRAM_METADATA_TAG_REQD_WORK_GROUP_SIZE) {
+      // If metadata is reqd_work_group_size, record it for the corresponding
+      // kernel name.
+      size_t MDElemsSize = MetadataElement.size - sizeof(std::uint64_t);
+
+      // Expect between 1 and 3 32-bit integer values.
+      UR_ASSERT(MDElemsSize >= sizeof(std::uint32_t) &&
+                    MDElemsSize <= sizeof(std::uint32_t) * 3,
+                UR_RESULT_ERROR_INVALID_WORK_GROUP_SIZE);
+
+      // Get pointer to data, skipping 64-bit size at the start of the data.
+      const char *ValuePtr =
+          reinterpret_cast<const char *>(MetadataElement.value.pData) +
+          sizeof(std::uint64_t);
+      // Read values and pad with 1's for values not present.
+      std::uint32_t ReqdWorkGroupElements[] = {1, 1, 1};
+      std::memcpy(ReqdWorkGroupElements, ValuePtr, MDElemsSize);
+      KernelReqdWorkGroupSizeMD[Prefix] =
+          std::make_tuple(ReqdWorkGroupElements[0], ReqdWorkGroupElements[1],
+                          ReqdWorkGroupElements[2]);
     }
   }
+
   return UR_RESULT_SUCCESS;
 }
 
@@ -224,6 +237,25 @@ ur_result_t ur_program_handle_t_::buildProgram(const char *BuildOptions) {
   BuildStatus = UR_PROGRAM_BUILD_STATUS_SUCCESS;
 
   // If no exception, result is correct
+  return UR_RESULT_SUCCESS;
+}
+
+ur_result_t ur_program_handle_t_::getGlobalVariablePointer(
+    const char *name, hipDeviceptr_t *DeviceGlobal, size_t *DeviceGlobalSize) {
+  // Since HIP requires a the global variable to be referenced by name, we use
+  // metadata to find the correct name to access it by.
+  auto DeviceGlobalNameIt = this->GlobalIDMD.find(name);
+  if (DeviceGlobalNameIt == this->GlobalIDMD.end())
+    return UR_RESULT_ERROR_INVALID_VALUE;
+  std::string DeviceGlobalName = DeviceGlobalNameIt->second;
+
+  try {
+    UR_CHECK_ERROR(hipModuleGetGlobal(DeviceGlobal, DeviceGlobalSize,
+                                      this->get(), DeviceGlobalName.c_str()));
+  } catch (ur_result_t Err) {
+    return Err;
+  }
+
   return UR_RESULT_SUCCESS;
 }
 
@@ -349,7 +381,7 @@ urProgramGetInfo(ur_program_handle_t hProgram, ur_program_info_t propName,
   case UR_PROGRAM_INFO_NUM_DEVICES:
     return ReturnValue(1u);
   case UR_PROGRAM_INFO_DEVICES:
-    return ReturnValue(hProgram->getDevice(), 1);
+    return ReturnValue(&hProgram->getContext()->getDevices()[0], 1);
   case UR_PROGRAM_INFO_SOURCE:
     return ReturnValue(hProgram->Binary);
   case UR_PROGRAM_INFO_BINARY_SIZES:
@@ -440,8 +472,6 @@ UR_APIEXPORT ur_result_t UR_APICALL urProgramCreateWithBinary(
   std::unique_ptr<ur_program_handle_t_> RetProgram{
       new ur_program_handle_t_{hContext, hDevice}};
 
-  // TODO: Set metadata here and use reqd_work_group_size information.
-  // See urProgramCreateWithBinary in CUDA adapter.
   if (pProperties) {
     if (pProperties->count > 0 && pProperties->pMetadatas == nullptr) {
       return UR_RESULT_ERROR_INVALID_NULL_POINTER;
@@ -450,8 +480,8 @@ UR_APIEXPORT ur_result_t UR_APICALL urProgramCreateWithBinary(
     }
     Result =
         RetProgram->setMetadata(pProperties->pMetadatas, pProperties->count);
+    UR_ASSERT(Result == UR_RESULT_SUCCESS, Result);
   }
-  UR_ASSERT(Result == UR_RESULT_SUCCESS, Result);
 
   auto pBinary_string = reinterpret_cast<const char *>(pBinary);
   if (size == 0) {
@@ -494,4 +524,12 @@ UR_APIEXPORT ur_result_t UR_APICALL urProgramGetFunctionPointer(
   }
 
   return Result;
+}
+
+UR_APIEXPORT ur_result_t UR_APICALL urProgramGetGlobalVariablePointer(
+    ur_device_handle_t, ur_program_handle_t hProgram,
+    const char *pGlobalVariableName, size_t *pGlobalVariableSizeRet,
+    void **ppGlobalVariablePointerRet) {
+  return hProgram->getGlobalVariablePointer(
+      pGlobalVariableName, ppGlobalVariablePointerRet, pGlobalVariableSizeRet);
 }

@@ -27,7 +27,7 @@ urUSMHostAlloc(ur_context_handle_t hContext, const ur_usm_desc_t *pUSMDesc,
             UR_RESULT_ERROR_INVALID_VALUE);
 
   if (!hPool) {
-    return USMHostAllocImpl(ppMem, hContext, nullptr, size, alignment);
+    return USMHostAllocImpl(ppMem, hContext, /* flags */ 0, size, alignment);
   }
 
   return umfPoolMallocHelper(hPool, ppMem, size, alignment);
@@ -43,7 +43,7 @@ urUSMDeviceAlloc(ur_context_handle_t hContext, ur_device_handle_t hDevice,
             UR_RESULT_ERROR_INVALID_VALUE);
 
   if (!hPool) {
-    return USMDeviceAllocImpl(ppMem, hContext, hDevice, nullptr, size,
+    return USMDeviceAllocImpl(ppMem, hContext, hDevice, /* flags */ 0, size,
                               alignment);
   }
 
@@ -60,8 +60,8 @@ urUSMSharedAlloc(ur_context_handle_t hContext, ur_device_handle_t hDevice,
             UR_RESULT_ERROR_INVALID_VALUE);
 
   if (!hPool) {
-    return USMSharedAllocImpl(ppMem, hContext, hDevice, nullptr, nullptr, size,
-                              alignment);
+    return USMSharedAllocImpl(ppMem, hContext, hDevice, /*host flags*/ 0,
+                              /*device flags*/ 0, size, alignment);
   }
 
   return umfPoolMallocHelper(hPool, ppMem, size, alignment);
@@ -105,7 +105,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urUSMFree(ur_context_handle_t hContext,
 
 ur_result_t USMDeviceAllocImpl(void **ResultPtr, ur_context_handle_t,
                                ur_device_handle_t Device,
-                               ur_usm_device_mem_flags_t *, size_t Size,
+                               ur_usm_device_mem_flags_t, size_t Size,
                                [[maybe_unused]] uint32_t Alignment) {
   try {
     ScopedContext Active(Device);
@@ -120,8 +120,8 @@ ur_result_t USMDeviceAllocImpl(void **ResultPtr, ur_context_handle_t,
 
 ur_result_t USMSharedAllocImpl(void **ResultPtr, ur_context_handle_t,
                                ur_device_handle_t Device,
-                               ur_usm_host_mem_flags_t *,
-                               ur_usm_device_mem_flags_t *, size_t Size,
+                               ur_usm_host_mem_flags_t,
+                               ur_usm_device_mem_flags_t, size_t Size,
                                [[maybe_unused]] uint32_t Alignment) {
   try {
     ScopedContext Active(Device);
@@ -136,7 +136,7 @@ ur_result_t USMSharedAllocImpl(void **ResultPtr, ur_context_handle_t,
 
 ur_result_t USMHostAllocImpl(void **ResultPtr,
                              [[maybe_unused]] ur_context_handle_t Context,
-                             ur_usm_host_mem_flags_t *, size_t Size,
+                             ur_usm_host_mem_flags_t, size_t Size,
                              [[maybe_unused]] uint32_t Alignment) {
   try {
     UR_CHECK_ERROR(hipHostMalloc(ResultPtr, Size));
@@ -160,7 +160,6 @@ urUSMGetMemAllocInfo(ur_context_handle_t hContext, const void *pMem,
   try {
     switch (propName) {
     case UR_USM_ALLOC_INFO_TYPE: {
-      unsigned int Value;
       // do not throw if hipPointerGetAttribute returns hipErrorInvalidValue
       hipError_t Ret = hipPointerGetAttributes(&hipPointerAttributeType, pMem);
       if (Ret == hipErrorInvalidValue) {
@@ -170,19 +169,27 @@ urUSMGetMemAllocInfo(ur_context_handle_t hContext, const void *pMem,
       // Direct usage of the function, instead of UR_CHECK_ERROR, so we can get
       // the line offset.
       checkErrorUR(Ret, __func__, __LINE__ - 5, __FILE__);
-      Value = hipPointerAttributeType.isManaged;
-      if (Value) {
-        // pointer to managed memory
-        return ReturnValue(UR_USM_TYPE_SHARED);
+      // ROCm 6.0.0 introduces hipMemoryTypeUnregistered in the hipMemoryType
+      // enum to mark unregistered allocations (i.e., via system allocators).
+#if HIP_VERSION_MAJOR >= 6
+      if (hipPointerAttributeType.type == hipMemoryTypeUnregistered) {
+        // pointer not known to the HIP subsystem
+        return ReturnValue(UR_USM_TYPE_UNKNOWN);
       }
-      UR_CHECK_ERROR(hipPointerGetAttributes(&hipPointerAttributeType, pMem));
+#endif
+      unsigned int Value;
 #if HIP_VERSION >= 50600000
       Value = hipPointerAttributeType.type;
 #else
       Value = hipPointerAttributeType.memoryType;
 #endif
-      UR_ASSERT(Value == hipMemoryTypeDevice || Value == hipMemoryTypeHost,
+      UR_ASSERT(Value == hipMemoryTypeDevice || Value == hipMemoryTypeHost ||
+                    Value == hipMemoryTypeManaged,
                 UR_RESULT_ERROR_INVALID_MEM_OBJECT);
+      if (hipPointerAttributeType.isManaged || Value == hipMemoryTypeManaged) {
+        // pointer to managed memory
+        return ReturnValue(UR_USM_TYPE_SHARED);
+      }
       if (Value == hipMemoryTypeDevice) {
         // pointer to device memory
         return ReturnValue(UR_USM_TYPE_DEVICE);
@@ -302,42 +309,33 @@ umf_result_t USMMemoryProvider::get_min_page_size(void *Ptr, size_t *PageSize) {
 
 ur_result_t USMSharedMemoryProvider::allocateImpl(void **ResultPtr, size_t Size,
                                                   uint32_t Alignment) {
-  return USMSharedAllocImpl(ResultPtr, Context, Device, nullptr, nullptr, Size,
-                            Alignment);
+  return USMSharedAllocImpl(ResultPtr, Context, Device, /*host flags*/ 0,
+                            /*device flags*/ 0, Size, Alignment);
 }
 
 ur_result_t USMDeviceMemoryProvider::allocateImpl(void **ResultPtr, size_t Size,
                                                   uint32_t Alignment) {
-  return USMDeviceAllocImpl(ResultPtr, Context, Device, nullptr, Size,
+  return USMDeviceAllocImpl(ResultPtr, Context, Device, /* flags */ 0, Size,
                             Alignment);
 }
 
 ur_result_t USMHostMemoryProvider::allocateImpl(void **ResultPtr, size_t Size,
                                                 uint32_t Alignment) {
-  return USMHostAllocImpl(ResultPtr, Context, nullptr, Size, Alignment);
+  return USMHostAllocImpl(ResultPtr, Context, /* flags */ 0, Size, Alignment);
 }
 
 ur_usm_pool_handle_t_::ur_usm_pool_handle_t_(ur_context_handle_t Context,
                                              ur_usm_pool_desc_t *PoolDesc)
     : Context(Context) {
-  const void *pNext = PoolDesc->pNext;
-  while (pNext != nullptr) {
-    const ur_base_desc_t *BaseDesc = static_cast<const ur_base_desc_t *>(pNext);
-    switch (BaseDesc->stype) {
-    case UR_STRUCTURE_TYPE_USM_POOL_LIMITS_DESC: {
-      const ur_usm_pool_limits_desc_t *Limits =
-          reinterpret_cast<const ur_usm_pool_limits_desc_t *>(BaseDesc);
+  if (PoolDesc) {
+    if (auto *Limits = find_stype_node<ur_usm_pool_limits_desc_t>(PoolDesc)) {
       for (auto &config : DisjointPoolConfigs.Configs) {
         config.MaxPoolableSize = Limits->maxPoolableSize;
         config.SlabMinSize = Limits->minDriverAllocSize;
       }
-      break;
-    }
-    default: {
+    } else {
       throw UsmAllocationException(UR_RESULT_ERROR_INVALID_ARGUMENT);
     }
-    }
-    pNext = BaseDesc->pNext;
   }
 
   auto MemProvider =

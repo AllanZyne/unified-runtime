@@ -8,6 +8,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <ur/ur.hpp>
+
 #include "common.hpp"
 
 inline cl_mem_alloc_flags_intel
@@ -66,8 +68,7 @@ usmDescToCLMemProperties(const ur_base_desc_t *Desc,
       return UR_RESULT_ERROR_INVALID_VALUE;
     }
 
-    Next = Next->pNext ? static_cast<const ur_base_desc_t *>(Next->pNext)
-                       : nullptr;
+    Next = static_cast<const ur_base_desc_t *>(Next->pNext);
   } while (Next);
 
   if (AllocFlags) {
@@ -239,7 +240,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urEnqueueUSMFill(
     return mapCLErrorToUR(CLErr);
   }
 
-  if (patternSize <= 128) {
+  if (patternSize <= 128 && isPowerOf2(patternSize)) {
     clEnqueueMemFillINTEL_fn EnqueueMemFill = nullptr;
     UR_RETURN_ON_FAILURE(
         cl_ext::getExtFuncFromContext<clEnqueueMemFillINTEL_fn>(

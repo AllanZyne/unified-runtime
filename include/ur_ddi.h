@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
  *
  * @file ur_ddi.h
- * @version v0.9-r0
+ * @version v0.10-r0
  *
  */
 #ifndef UR_DDI_H_INCLUDED
@@ -330,6 +330,15 @@ typedef ur_result_t(UR_APICALL *ur_pfnProgramGetFunctionPointer_t)(
     void **);
 
 ///////////////////////////////////////////////////////////////////////////////
+/// @brief Function-pointer for urProgramGetGlobalVariablePointer
+typedef ur_result_t(UR_APICALL *ur_pfnProgramGetGlobalVariablePointer_t)(
+    ur_device_handle_t,
+    ur_program_handle_t,
+    const char *,
+    size_t *,
+    void **);
+
+///////////////////////////////////////////////////////////////////////////////
 /// @brief Function-pointer for urProgramGetInfo
 typedef ur_result_t(UR_APICALL *ur_pfnProgramGetInfo_t)(
     ur_program_handle_t,
@@ -380,6 +389,7 @@ typedef struct ur_program_dditable_t {
     ur_pfnProgramRetain_t pfnRetain;
     ur_pfnProgramRelease_t pfnRelease;
     ur_pfnProgramGetFunctionPointer_t pfnGetFunctionPointer;
+    ur_pfnProgramGetGlobalVariablePointer_t pfnGetGlobalVariablePointer;
     ur_pfnProgramGetInfo_t pfnGetInfo;
     ur_pfnProgramGetBuildInfo_t pfnGetBuildInfo;
     ur_pfnProgramSetSpecializationConstants_t pfnSetSpecializationConstants;
@@ -1439,9 +1449,19 @@ typedef ur_result_t(UR_APICALL *ur_pfnEnqueueCooperativeKernelLaunchExp_t)(
     ur_event_handle_t *);
 
 ///////////////////////////////////////////////////////////////////////////////
+/// @brief Function-pointer for urEnqueueTimestampRecordingExp
+typedef ur_result_t(UR_APICALL *ur_pfnEnqueueTimestampRecordingExp_t)(
+    ur_queue_handle_t,
+    bool,
+    uint32_t,
+    const ur_event_handle_t *,
+    ur_event_handle_t *);
+
+///////////////////////////////////////////////////////////////////////////////
 /// @brief Table of EnqueueExp functions pointers
 typedef struct ur_enqueue_exp_dditable_t {
     ur_pfnEnqueueCooperativeKernelLaunchExp_t pfnCooperativeKernelLaunchExp;
+    ur_pfnEnqueueTimestampRecordingExp_t pfnTimestampRecordingExp;
 } ur_enqueue_exp_dditable_t;
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1503,7 +1523,6 @@ typedef ur_result_t(UR_APICALL *ur_pfnBindlessImagesUnsampledImageCreateExp_t)(
     ur_exp_image_mem_handle_t,
     const ur_image_format_t *,
     const ur_image_desc_t *,
-    ur_mem_handle_t *,
     ur_exp_image_handle_t *);
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1515,7 +1534,6 @@ typedef ur_result_t(UR_APICALL *ur_pfnBindlessImagesSampledImageCreateExp_t)(
     const ur_image_format_t *,
     const ur_image_desc_t *,
     ur_sampler_handle_t,
-    ur_mem_handle_t *,
     ur_exp_image_handle_t *);
 
 ///////////////////////////////////////////////////////////////////////////////

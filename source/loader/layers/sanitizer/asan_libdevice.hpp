@@ -23,6 +23,7 @@ enum class DeviceSanitizerErrorType : int32_t {
     USE_AFTER_FREE,
     OUT_OF_SHADOW_BOUNDS,
     UNKNOWN_DEVICE,
+    NULL_POINTER,
 };
 
 enum class DeviceSanitizerMemoryType : int32_t {
@@ -39,8 +40,8 @@ enum class DeviceSanitizerMemoryType : int32_t {
 struct DeviceSanitizerReport {
     int Flag = 0;
 
-    char File[256 + 1] = "";
-    char Func[256 + 1] = "";
+    char File[256 + 1] = {};
+    char Func[256 + 1] = {};
 
     int32_t Line = 0;
 
@@ -52,14 +53,65 @@ struct DeviceSanitizerReport {
     uint64_t LID1 = 0;
     uint64_t LID2 = 0;
 
-    uint64_t Addr = 0;
+    uintptr_t Address = 0;
     bool IsWrite = false;
     uint32_t AccessSize = 0;
-    DeviceSanitizerMemoryType MemoryType;
-    DeviceSanitizerErrorType ErrorType;
+    DeviceSanitizerMemoryType MemoryType = DeviceSanitizerMemoryType::UNKNOWN;
+    DeviceSanitizerErrorType ErrorType = DeviceSanitizerErrorType::UNKNOWN;
 
     bool IsRecover = false;
 };
+
+struct LocalArgsInfo {
+    uint64_t Size = 0;
+    uint64_t SizeWithRedZone = 0;
+};
+
+struct LaunchInfo {
+    uintptr_t PrivateShadowOffset =
+        0; // don't move this field, we use it in AddressSanitizerPass
+
+    uintptr_t LocalShadowOffset = 0;
+    uintptr_t LocalShadowOffsetEnd = 0;
+    DeviceSanitizerReport SanitizerReport;
+
+    uint32_t NumLocalArgs = 0;
+    LocalArgsInfo *LocalArgs = nullptr; // ordered by ArgIndex
+};
+
+constexpr unsigned ASAN_SHADOW_SCALE = 3;
+constexpr unsigned ASAN_SHADOW_GRANULARITY = 1ULL << ASAN_SHADOW_SCALE;
+
+// These magic values are written to shadow for better error
+// reporting.
+constexpr int kUsmDeviceRedzoneMagic = (char)0x81;
+constexpr int kUsmHostRedzoneMagic = (char)0x82;
+constexpr int kUsmSharedRedzoneMagic = (char)0x83;
+constexpr int kMemBufferRedzoneMagic = (char)0x84;
+constexpr int kDeviceGlobalRedzoneMagic = (char)0x85;
+constexpr int kNullPointerRedzoneMagic = (char)0x86;
+
+constexpr int kUsmDeviceDeallocatedMagic = (char)0x91;
+constexpr int kUsmHostDeallocatedMagic = (char)0x92;
+constexpr int kUsmSharedDeallocatedMagic = (char)0x93;
+constexpr int kMemBufferDeallocatedMagic = (char)0x93;
+
+constexpr int kSharedLocalRedzoneMagic = (char)0xa1;
+
+// Same with host ASan stack
+const int kPrivateLeftRedzoneMagic = (char)0xf1;
+const int kPrivateMidRedzoneMagic = (char)0xf2;
+const int kPrivateRightRedzoneMagic = (char)0xf3;
+
+constexpr auto kSPIR_AsanShadowMemoryGlobalStart =
+    "__AsanShadowMemoryGlobalStart";
+constexpr auto kSPIR_AsanShadowMemoryGlobalEnd = "__AsanShadowMemoryGlobalEnd";
+
+constexpr auto kSPIR_DeviceType = "__DeviceType";
+constexpr auto kSPIR_AsanDebug = "__AsanDebug";
+
+constexpr auto kSPIR_AsanDeviceGlobalCount = "__AsanDeviceGlobalCount";
+constexpr auto kSPIR_AsanDeviceGlobalMetadata = "__AsanDeviceGlobalMetadata";
 
 inline const char *ToString(DeviceSanitizerMemoryType MemoryType) {
     switch (MemoryType) {
@@ -94,6 +146,8 @@ inline const char *ToString(DeviceSanitizerErrorType ErrorType) {
         return "out-of-shadow-bounds-access";
     case DeviceSanitizerErrorType::UNKNOWN_DEVICE:
         return "unknown-device";
+    case DeviceSanitizerErrorType::NULL_POINTER:
+        return "null-pointer-access";
     default:
         return "unknown-error";
     }

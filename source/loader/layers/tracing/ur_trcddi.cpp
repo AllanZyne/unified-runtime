@@ -1331,7 +1331,7 @@ __urdlllocal ur_result_t UR_APICALL urUSMHostAlloc(
     ur_usm_pool_handle_t
         pool, ///< [in][optional] Pointer to a pool created using urUSMPoolCreate
     size_t
-        size, ///< [in] size in bytes of the USM memory object to be allocated
+        size, ///< [in] minimum size in bytes of the USM memory object to be allocated
     void **ppMem ///< [out] pointer to USM host memory object
 ) {
     auto pfnHostAlloc = context.urDdiTable.USM.pfnHostAlloc;
@@ -1363,7 +1363,7 @@ __urdlllocal ur_result_t UR_APICALL urUSMDeviceAlloc(
     ur_usm_pool_handle_t
         pool, ///< [in][optional] Pointer to a pool created using urUSMPoolCreate
     size_t
-        size, ///< [in] size in bytes of the USM memory object to be allocated
+        size, ///< [in] minimum size in bytes of the USM memory object to be allocated
     void **ppMem ///< [out] pointer to USM device memory object
 ) {
     auto pfnDeviceAlloc = context.urDdiTable.USM.pfnDeviceAlloc;
@@ -1396,7 +1396,7 @@ __urdlllocal ur_result_t UR_APICALL urUSMSharedAlloc(
     ur_usm_pool_handle_t
         pool, ///< [in][optional] Pointer to a pool created using urUSMPoolCreate
     size_t
-        size, ///< [in] size in bytes of the USM memory object to be allocated
+        size, ///< [in] minimum size in bytes of the USM memory object to be allocated
     void **ppMem ///< [out] pointer to USM shared memory object
 ) {
     auto pfnSharedAlloc = context.urDdiTable.USM.pfnSharedAlloc;
@@ -2121,6 +2121,46 @@ __urdlllocal ur_result_t UR_APICALL urProgramGetFunctionPointer(
 
     context.notify_end(UR_FUNCTION_PROGRAM_GET_FUNCTION_POINTER,
                        "urProgramGetFunctionPointer", &params, &result,
+                       instance);
+
+    return result;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Intercept function for urProgramGetGlobalVariablePointer
+__urdlllocal ur_result_t UR_APICALL urProgramGetGlobalVariablePointer(
+    ur_device_handle_t
+        hDevice, ///< [in] handle of the device to retrieve the pointer for.
+    ur_program_handle_t
+        hProgram, ///< [in] handle of the program where the global variable is.
+    const char *
+        pGlobalVariableName, ///< [in] mangled name of the global variable to retrieve the pointer for.
+    size_t *
+        pGlobalVariableSizeRet, ///< [out][optional] Returns the size of the global variable if it is found
+                                ///< in the program.
+    void **
+        ppGlobalVariablePointerRet ///< [out] Returns the pointer to the global variable if it is found in the program.
+) {
+    auto pfnGetGlobalVariablePointer =
+        context.urDdiTable.Program.pfnGetGlobalVariablePointer;
+
+    if (nullptr == pfnGetGlobalVariablePointer) {
+        return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
+    }
+
+    ur_program_get_global_variable_pointer_params_t params = {
+        &hDevice, &hProgram, &pGlobalVariableName, &pGlobalVariableSizeRet,
+        &ppGlobalVariablePointerRet};
+    uint64_t instance =
+        context.notify_begin(UR_FUNCTION_PROGRAM_GET_GLOBAL_VARIABLE_POINTER,
+                             "urProgramGetGlobalVariablePointer", &params);
+
+    ur_result_t result = pfnGetGlobalVariablePointer(
+        hDevice, hProgram, pGlobalVariableName, pGlobalVariableSizeRet,
+        ppGlobalVariablePointerRet);
+
+    context.notify_end(UR_FUNCTION_PROGRAM_GET_GLOBAL_VARIABLE_POINTER,
+                       "urProgramGetGlobalVariablePointer", &params, &result,
                        instance);
 
     return result;
@@ -4566,7 +4606,6 @@ __urdlllocal ur_result_t UR_APICALL urBindlessImagesUnsampledImageCreateExp(
     const ur_image_format_t
         *pImageFormat, ///< [in] pointer to image format specification
     const ur_image_desc_t *pImageDesc, ///< [in] pointer to image description
-    ur_mem_handle_t *phMem, ///< [out] pointer to handle of image object created
     ur_exp_image_handle_t
         *phImage ///< [out] pointer to handle of image object created
 ) {
@@ -4578,14 +4617,13 @@ __urdlllocal ur_result_t UR_APICALL urBindlessImagesUnsampledImageCreateExp(
     }
 
     ur_bindless_images_unsampled_image_create_exp_params_t params = {
-        &hContext,   &hDevice, &hImageMem, &pImageFormat,
-        &pImageDesc, &phMem,   &phImage};
+        &hContext, &hDevice, &hImageMem, &pImageFormat, &pImageDesc, &phImage};
     uint64_t instance = context.notify_begin(
         UR_FUNCTION_BINDLESS_IMAGES_UNSAMPLED_IMAGE_CREATE_EXP,
         "urBindlessImagesUnsampledImageCreateExp", &params);
 
     ur_result_t result = pfnUnsampledImageCreateExp(
-        hContext, hDevice, hImageMem, pImageFormat, pImageDesc, phMem, phImage);
+        hContext, hDevice, hImageMem, pImageFormat, pImageDesc, phImage);
 
     context.notify_end(UR_FUNCTION_BINDLESS_IMAGES_UNSAMPLED_IMAGE_CREATE_EXP,
                        "urBindlessImagesUnsampledImageCreateExp", &params,
@@ -4605,7 +4643,6 @@ __urdlllocal ur_result_t UR_APICALL urBindlessImagesSampledImageCreateExp(
         *pImageFormat, ///< [in] pointer to image format specification
     const ur_image_desc_t *pImageDesc, ///< [in] pointer to image description
     ur_sampler_handle_t hSampler,      ///< [in] sampler to be used
-    ur_mem_handle_t *phMem, ///< [out] pointer to handle of image object created
     ur_exp_image_handle_t
         *phImage ///< [out] pointer to handle of image object created
 ) {
@@ -4618,14 +4655,14 @@ __urdlllocal ur_result_t UR_APICALL urBindlessImagesSampledImageCreateExp(
 
     ur_bindless_images_sampled_image_create_exp_params_t params = {
         &hContext,   &hDevice,  &hImageMem, &pImageFormat,
-        &pImageDesc, &hSampler, &phMem,     &phImage};
+        &pImageDesc, &hSampler, &phImage};
     uint64_t instance = context.notify_begin(
         UR_FUNCTION_BINDLESS_IMAGES_SAMPLED_IMAGE_CREATE_EXP,
         "urBindlessImagesSampledImageCreateExp", &params);
 
     ur_result_t result =
         pfnSampledImageCreateExp(hContext, hDevice, hImageMem, pImageFormat,
-                                 pImageDesc, hSampler, phMem, phImage);
+                                 pImageDesc, hSampler, phImage);
 
     context.notify_end(UR_FUNCTION_BINDLESS_IMAGES_SAMPLED_IMAGE_CREATE_EXP,
                        "urBindlessImagesSampledImageCreateExp", &params,
@@ -5165,12 +5202,13 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendKernelLaunchExp(
         *pGlobalWorkOffset, ///< [in] Offset to use when executing kernel.
     const size_t *
         pGlobalWorkSize, ///< [in] Global work size to use when executing kernel.
-    const size_t
-        *pLocalWorkSize, ///< [in] Local work size to use when executing kernel.
+    const size_t *
+        pLocalWorkSize, ///< [in][optional] Local work size to use when executing kernel.
     uint32_t
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
-        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                            ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *
         pSyncPoint, ///< [out][optional] Sync point associated with this command.
     ur_exp_command_buffer_command_handle_t
@@ -5221,7 +5259,8 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendUSMMemcpyExp(
     uint32_t
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
-        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                            ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *
         pSyncPoint ///< [out][optional] Sync point associated with this command.
 ) {
@@ -5263,7 +5302,8 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendUSMFillExp(
     uint32_t
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
-        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                            ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *
         pSyncPoint ///< [out][optional] sync point associated with this command.
 ) {
@@ -5306,7 +5346,8 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendMemBufferCopyExp(
     uint32_t
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
-        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                            ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *
         pSyncPoint ///< [out][optional] Sync point associated with this command.
 ) {
@@ -5355,7 +5396,8 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendMemBufferWriteExp(
     uint32_t
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
-        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                            ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *
         pSyncPoint ///< [out][optional] Sync point associated with this command.
 ) {
@@ -5402,7 +5444,8 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendMemBufferReadExp(
     uint32_t
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
-        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                            ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *
         pSyncPoint ///< [out][optional] Sync point associated with this command.
 ) {
@@ -5457,7 +5500,8 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendMemBufferCopyRectExp(
     uint32_t
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
-        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                            ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *
         pSyncPoint ///< [out][optional] Sync point associated with this command.
 ) {
@@ -5525,7 +5569,8 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendMemBufferWriteRectExp(
     uint32_t
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
-        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                            ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *
         pSyncPoint ///< [out][optional] Sync point associated with this command.
 ) {
@@ -5591,7 +5636,8 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendMemBufferReadRectExp(
     uint32_t
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
-        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                            ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *
         pSyncPoint ///< [out][optional] Sync point associated with this command.
 ) {
@@ -5647,7 +5693,8 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendMemBufferFillExp(
     uint32_t
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
-        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                            ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *
         pSyncPoint ///< [out][optional] sync point associated with this command.
 ) {
@@ -5694,7 +5741,8 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendUSMPrefetchExp(
     uint32_t
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
-        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                            ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *
         pSyncPoint ///< [out][optional] sync point associated with this command.
 ) {
@@ -5739,7 +5787,8 @@ __urdlllocal ur_result_t UR_APICALL urCommandBufferAppendUSMAdviseExp(
     uint32_t
         numSyncPointsInWaitList, ///< [in] The number of sync points in the provided dependency list.
     const ur_exp_command_buffer_sync_point_t *
-        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on.
+        pSyncPointWaitList, ///< [in][optional] A list of sync points that this command depends on. May
+                            ///< be ignored if command-buffer is in-order.
     ur_exp_command_buffer_sync_point_t *
         pSyncPoint ///< [out][optional] sync point associated with this command.
 ) {
@@ -6065,6 +6114,52 @@ __urdlllocal ur_result_t UR_APICALL urKernelSuggestMaxCooperativeGroupCountExp(
         UR_FUNCTION_KERNEL_SUGGEST_MAX_COOPERATIVE_GROUP_COUNT_EXP,
         "urKernelSuggestMaxCooperativeGroupCountExp", &params, &result,
         instance);
+
+    return result;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+/// @brief Intercept function for urEnqueueTimestampRecordingExp
+__urdlllocal ur_result_t UR_APICALL urEnqueueTimestampRecordingExp(
+    ur_queue_handle_t hQueue, ///< [in] handle of the queue object
+    bool
+        blocking, ///< [in] indicates whether the call to this function should block until
+    ///< until the device timestamp recording command has executed on the
+    ///< device.
+    uint32_t numEventsInWaitList, ///< [in] size of the event wait list
+    const ur_event_handle_t *
+        phEventWaitList, ///< [in][optional][range(0, numEventsInWaitList)] pointer to a list of
+    ///< events that must be complete before the kernel execution.
+    ///< If nullptr, the numEventsInWaitList must be 0, indicating no wait
+    ///< events.
+    ur_event_handle_t *
+        phEvent ///< [in,out] return an event object that identifies this particular kernel
+                ///< execution instance. Profiling information can be queried
+    ///< from this event as if `hQueue` had profiling enabled. Querying
+    ///< `UR_PROFILING_INFO_COMMAND_QUEUED` or `UR_PROFILING_INFO_COMMAND_SUBMIT`
+    ///< reports the timestamp at the time of the call to this function.
+    ///< Querying `UR_PROFILING_INFO_COMMAND_START` or `UR_PROFILING_INFO_COMMAND_END`
+    ///< reports the timestamp recorded when the command is executed on the device.
+) {
+    auto pfnTimestampRecordingExp =
+        context.urDdiTable.EnqueueExp.pfnTimestampRecordingExp;
+
+    if (nullptr == pfnTimestampRecordingExp) {
+        return UR_RESULT_ERROR_UNSUPPORTED_FEATURE;
+    }
+
+    ur_enqueue_timestamp_recording_exp_params_t params = {
+        &hQueue, &blocking, &numEventsInWaitList, &phEventWaitList, &phEvent};
+    uint64_t instance =
+        context.notify_begin(UR_FUNCTION_ENQUEUE_TIMESTAMP_RECORDING_EXP,
+                             "urEnqueueTimestampRecordingExp", &params);
+
+    ur_result_t result = pfnTimestampRecordingExp(
+        hQueue, blocking, numEventsInWaitList, phEventWaitList, phEvent);
+
+    context.notify_end(UR_FUNCTION_ENQUEUE_TIMESTAMP_RECORDING_EXP,
+                       "urEnqueueTimestampRecordingExp", &params, &result,
+                       instance);
 
     return result;
 }
@@ -6776,6 +6871,10 @@ __urdlllocal ur_result_t UR_APICALL urGetEnqueueExpProcAddrTable(
     pDdiTable->pfnCooperativeKernelLaunchExp =
         ur_tracing_layer::urEnqueueCooperativeKernelLaunchExp;
 
+    dditable.pfnTimestampRecordingExp = pDdiTable->pfnTimestampRecordingExp;
+    pDdiTable->pfnTimestampRecordingExp =
+        ur_tracing_layer::urEnqueueTimestampRecordingExp;
+
     return result;
 }
 ///////////////////////////////////////////////////////////////////////////////
@@ -7152,6 +7251,11 @@ __urdlllocal ur_result_t UR_APICALL urGetProgramProcAddrTable(
     dditable.pfnGetFunctionPointer = pDdiTable->pfnGetFunctionPointer;
     pDdiTable->pfnGetFunctionPointer =
         ur_tracing_layer::urProgramGetFunctionPointer;
+
+    dditable.pfnGetGlobalVariablePointer =
+        pDdiTable->pfnGetGlobalVariablePointer;
+    pDdiTable->pfnGetGlobalVariablePointer =
+        ur_tracing_layer::urProgramGetGlobalVariablePointer;
 
     dditable.pfnGetInfo = pDdiTable->pfnGetInfo;
     pDdiTable->pfnGetInfo = ur_tracing_layer::urProgramGetInfo;

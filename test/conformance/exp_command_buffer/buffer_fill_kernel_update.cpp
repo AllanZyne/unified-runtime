@@ -14,10 +14,37 @@ struct BufferFillCommandTest
         UUR_RETURN_ON_FATAL_FAILURE(
             urUpdatableCommandBufferExpExecutionTest::SetUp());
 
-        // First argument is buffer to fill (will also be hidden accessor arg)
-        AddBuffer1DArg(sizeof(val) * global_size, &buffer);
-        // Second argument is scalar to fill with.
-        AddPodArg(val);
+        ASSERT_SUCCESS(urMemBufferCreate(context, UR_MEM_FLAG_READ_WRITE,
+                                         sizeof(val) * global_size, nullptr,
+                                         &buffer));
+
+        // First argument is buffer to fill
+        unsigned current_arg_index = 0;
+        ASSERT_SUCCESS(
+            urKernelSetArgMemObj(kernel, current_arg_index++, nullptr, buffer));
+
+        // Add accessor arguments depending on backend.
+        // HIP has 3 offset parameters and other backends only have 1.
+        if (backend == UR_PLATFORM_BACKEND_HIP) {
+            size_t val = 0;
+            ASSERT_SUCCESS(urKernelSetArgValue(kernel, current_arg_index++,
+                                               sizeof(size_t), nullptr, &val));
+            ASSERT_SUCCESS(urKernelSetArgValue(kernel, current_arg_index++,
+                                               sizeof(size_t), nullptr, &val));
+            ASSERT_SUCCESS(urKernelSetArgValue(kernel, current_arg_index++,
+                                               sizeof(size_t), nullptr, &val));
+        } else {
+            struct {
+                size_t offsets[1] = {0};
+            } accessor;
+            ASSERT_SUCCESS(urKernelSetArgValue(kernel, current_arg_index++,
+                                               sizeof(accessor), nullptr,
+                                               &accessor));
+        }
+
+        // Second user defined argument is scalar to fill with.
+        ASSERT_SUCCESS(urKernelSetArgValue(kernel, current_arg_index++,
+                                           sizeof(val), nullptr, &val));
 
         // Append kernel command to command-buffer and close command-buffer
         ASSERT_SUCCESS(urCommandBufferAppendKernelLaunchExp(
@@ -99,12 +126,10 @@ TEST_P(BufferFillCommandTest, UpdateParameters) {
         1,                // numNewMemObjArgs
         0,                // numNewPointerArgs
         1,                // numNewValueArgs
-        0,                // numNewExecInfos
         0,                // newWorkDim
         &new_output_desc, // pNewMemObjArgList
         nullptr,          // pNewPointerArgList
         &new_input_desc,  // pNewValueArgList
-        nullptr,          // pNewExecInfoList
         nullptr,          // pNewGlobalWorkOffset
         nullptr,          // pNewGlobalWorkSize
         nullptr,          // pNewLocalWorkSize
@@ -123,6 +148,10 @@ TEST_P(BufferFillCommandTest, UpdateParameters) {
 
 // Test updating the global size so that the fill outputs to a larger buffer
 TEST_P(BufferFillCommandTest, UpdateGlobalSize) {
+    if (!updatable_execution_range_support) {
+        GTEST_SKIP() << "Execution range update is not supported.";
+    }
+
     ASSERT_SUCCESS(urCommandBufferEnqueueExp(updatable_cmd_buf_handle, queue, 0,
                                              nullptr, nullptr));
     ASSERT_SUCCESS(urQueueFinish(queue));
@@ -146,21 +175,20 @@ TEST_P(BufferFillCommandTest, UpdateGlobalSize) {
         new_buffer, // hArgValue
     };
 
+    auto new_local_size = local_size;
     ur_exp_command_buffer_update_kernel_launch_desc_t update_desc = {
         UR_STRUCTURE_TYPE_EXP_COMMAND_BUFFER_UPDATE_KERNEL_LAUNCH_DESC, // stype
         nullptr,                                                        // pNext
         1,                // numNewMemObjArgs
         0,                // numNewPointerArgs
         0,                // numNewValueArgs
-        0,                // numNewExecInfos
-        0,                // newWorkDim
+        1,                // newWorkDim
         &new_output_desc, // pNewMemObjArgList
         nullptr,          // pNewPointerArgList
         nullptr,          // pNewValueArgList
-        nullptr,          // pNewExecInfoList
         nullptr,          // pNewGlobalWorkOffset
         &new_global_size, // pNewGlobalWorkSize
-        nullptr,          // pNewLocalWorkSize
+        &new_local_size,  // pNewLocalWorkSize
     };
 
     ASSERT_SUCCESS(
@@ -180,7 +208,8 @@ TEST_P(BufferFillCommandTest, SeparateUpdateCalls) {
     ASSERT_SUCCESS(urQueueFinish(queue));
     ValidateBuffer(buffer, sizeof(val) * global_size, val);
 
-    size_t new_global_size = 64;
+    size_t new_global_size =
+        updatable_execution_range_support ? 64 : global_size;
     const size_t new_buffer_size = sizeof(val) * new_global_size;
     ASSERT_SUCCESS(urMemBufferCreate(context, UR_MEM_FLAG_READ_WRITE,
                                      new_buffer_size, nullptr, &new_buffer));
@@ -204,12 +233,10 @@ TEST_P(BufferFillCommandTest, SeparateUpdateCalls) {
         1,                // numNewMemObjArgs
         0,                // numNewPointerArgs
         0,                // numNewValueArgs
-        0,                // numNewExecInfos
         0,                // newWorkDim
         &new_output_desc, // pNewMemObjArgList
         nullptr,          // pNewPointerArgList
         nullptr,          // pNewValueArgList
-        nullptr,          // pNewExecInfoList
         nullptr,          // pNewGlobalWorkOffset
         nullptr,          // pNewGlobalWorkSize
         nullptr,          // pNewLocalWorkSize
@@ -234,12 +261,10 @@ TEST_P(BufferFillCommandTest, SeparateUpdateCalls) {
         0,               // numNewMemObjArgs
         0,               // numNewPointerArgs
         1,               // numNewValueArgs
-        0,               // numNewExecInfos
         0,               // newWorkDim
         nullptr,         // pNewMemObjArgList
         nullptr,         // pNewPointerArgList
         &new_input_desc, // pNewValueArgList
-        nullptr,         // pNewExecInfoList
         nullptr,         // pNewGlobalWorkOffset
         nullptr,         // pNewGlobalWorkSize
         nullptr,         // pNewLocalWorkSize
@@ -247,25 +272,26 @@ TEST_P(BufferFillCommandTest, SeparateUpdateCalls) {
     ASSERT_SUCCESS(urCommandBufferUpdateKernelLaunchExp(command_handle,
                                                         &input_update_desc));
 
-    ur_exp_command_buffer_update_kernel_launch_desc_t global_size_update_desc = {
-        UR_STRUCTURE_TYPE_EXP_COMMAND_BUFFER_UPDATE_KERNEL_LAUNCH_DESC, // stype
-        nullptr,                                                        // pNext
-        0,                // numNewMemObjArgs
-        0,                // numNewPointerArgs
-        0,                // numNewValueArgs
-        0,                // numNewExecInfos
-        0,                // newWorkDim
-        nullptr,          // pNewMemObjArgList
-        nullptr,          // pNewPointerArgList
-        nullptr,          // pNewValueArgList
-        nullptr,          // pNewExecInfoList
-        nullptr,          // pNewGlobalWorkOffset
-        &new_global_size, // pNewGlobalWorkSize
-        nullptr,          // pNewLocalWorkSize
-    };
+    if (updatable_execution_range_support) {
+        ur_exp_command_buffer_update_kernel_launch_desc_t
+            global_size_update_desc = {
+                UR_STRUCTURE_TYPE_EXP_COMMAND_BUFFER_UPDATE_KERNEL_LAUNCH_DESC, // stype
+                nullptr,          // pNext
+                0,                // numNewMemObjArgs
+                0,                // numNewPointerArgs
+                0,                // numNewValueArgs
+                0,                // newWorkDim
+                nullptr,          // pNewMemObjArgList
+                nullptr,          // pNewPointerArgList
+                nullptr,          // pNewValueArgList
+                nullptr,          // pNewGlobalWorkOffset
+                &new_global_size, // pNewGlobalWorkSize
+                nullptr,          // pNewLocalWorkSize
+            };
 
-    ASSERT_SUCCESS(urCommandBufferUpdateKernelLaunchExp(
-        command_handle, &global_size_update_desc));
+        ASSERT_SUCCESS(urCommandBufferUpdateKernelLaunchExp(
+            command_handle, &global_size_update_desc));
+    }
 
     ASSERT_SUCCESS(urCommandBufferEnqueueExp(updatable_cmd_buf_handle, queue, 0,
                                              nullptr, nullptr));
@@ -299,12 +325,10 @@ TEST_P(BufferFillCommandTest, OverrideUpdate) {
         0,                 // numNewMemObjArgs
         0,                 // numNewPointerArgs
         1,                 // numNewValueArgs
-        0,                 // numNewExecInfos
         0,                 // newWorkDim
         nullptr,           // pNewMemObjArgList
         nullptr,           // pNewPointerArgList
         &first_input_desc, // pNewValueArgList
-        nullptr,           // pNewExecInfoList
         nullptr,           // pNewGlobalWorkOffset
         nullptr,           // pNewGlobalWorkSize
         nullptr,           // pNewLocalWorkSize
@@ -328,12 +352,10 @@ TEST_P(BufferFillCommandTest, OverrideUpdate) {
         0,                  // numNewMemObjArgs
         0,                  // numNewPointerArgs
         1,                  // numNewValueArgs
-        0,                  // numNewExecInfos
         0,                  // newWorkDim
         nullptr,            // pNewMemObjArgList
         nullptr,            // pNewPointerArgList
         &second_input_desc, // pNewValueArgList
-        nullptr,            // pNewExecInfoList
         nullptr,            // pNewGlobalWorkOffset
         nullptr,            // pNewGlobalWorkSize
         nullptr,            // pNewLocalWorkSize
@@ -386,12 +408,10 @@ TEST_P(BufferFillCommandTest, OverrideArgList) {
         0,           // numNewMemObjArgs
         0,           // numNewPointerArgs
         2,           // numNewValueArgs
-        0,           // numNewExecInfos
         0,           // newWorkDim
         nullptr,     // pNewMemObjArgList
         nullptr,     // pNewPointerArgList
         input_descs, // pNewValueArgList
-        nullptr,     // pNewExecInfoList
         nullptr,     // pNewGlobalWorkOffset
         nullptr,     // pNewGlobalWorkSize
         nullptr,     // pNewLocalWorkSize

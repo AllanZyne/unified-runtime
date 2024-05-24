@@ -170,7 +170,6 @@ static ur_result_t enqueueCommandBufferFillHelper(
 
   try {
     const size_t N = Size / PatternSize;
-    auto Value = *static_cast<const uint32_t *>(Pattern);
     auto DstPtr = DstType == CU_MEMORYTYPE_DEVICE
                       ? *static_cast<CUdeviceptr *>(DstDevice)
                       : (CUdeviceptr)DstDevice;
@@ -183,12 +182,31 @@ static ur_result_t enqueueCommandBufferFillHelper(
       NodeParams.elementSize = PatternSize;
       NodeParams.height = N;
       NodeParams.pitch = PatternSize;
-      NodeParams.value = Value;
       NodeParams.width = 1;
 
-      UR_CHECK_ERROR(cuGraphAddMemsetNode(
-          &GraphNode, CommandBuffer->CudaGraph, DepsList.data(),
-          DepsList.size(), &NodeParams, CommandBuffer->Device->getContext()));
+      // pattern size in bytes
+      switch (PatternSize) {
+      case 1: {
+        auto Value = *static_cast<const uint8_t *>(Pattern);
+        NodeParams.value = Value;
+        break;
+      }
+      case 2: {
+        auto Value = *static_cast<const uint16_t *>(Pattern);
+        NodeParams.value = Value;
+        break;
+      }
+      case 4: {
+        auto Value = *static_cast<const uint32_t *>(Pattern);
+        NodeParams.value = Value;
+        break;
+      }
+      }
+
+      UR_CHECK_ERROR(
+          cuGraphAddMemsetNode(&GraphNode, CommandBuffer->CudaGraph,
+                               DepsList.data(), DepsList.size(), &NodeParams,
+                               CommandBuffer->Device->getNativeContext()));
 
       // Get sync point and register the cuNode with it.
       *SyncPoint =
@@ -198,40 +216,68 @@ static ur_result_t enqueueCommandBufferFillHelper(
       // CUDA has no memset functions that allow setting values more than 4
       // bytes. UR API lets you pass an arbitrary "pattern" to the buffer
       // fill, which can be more than 4 bytes. We must break up the pattern
-      // into 4 byte values, and set the buffer using multiple strided calls.
-      // This means that one cuGraphAddMemsetNode call is made for every 4 bytes
-      // in the pattern.
+      // into 1 byte values, and set the buffer using multiple strided calls.
+      // This means that one cuGraphAddMemsetNode call is made for every 1
+      // bytes in the pattern.
 
-      size_t NumberOfSteps = PatternSize / sizeof(uint32_t);
+      size_t NumberOfSteps = PatternSize / sizeof(uint8_t);
 
-      // we walk up the pattern in 4-byte steps, and call cuMemset for each
-      // 4-byte chunk of the pattern.
-      for (auto Step = 0u; Step < NumberOfSteps; ++Step) {
+      // Shared pointer that will point to the last node created
+      std::shared_ptr<CUgraphNode> GraphNodePtr;
+      // Create a new node
+      CUgraphNode GraphNodeFirst;
+      // Update NodeParam
+      CUDA_MEMSET_NODE_PARAMS NodeParamsStepFirst = {};
+      NodeParamsStepFirst.dst = DstPtr;
+      NodeParamsStepFirst.elementSize = sizeof(uint32_t);
+      NodeParamsStepFirst.height = Size / sizeof(uint32_t);
+      NodeParamsStepFirst.pitch = sizeof(uint32_t);
+      NodeParamsStepFirst.value = *static_cast<const uint32_t *>(Pattern);
+      NodeParamsStepFirst.width = 1;
+
+      UR_CHECK_ERROR(cuGraphAddMemsetNode(
+          &GraphNodeFirst, CommandBuffer->CudaGraph, DepsList.data(),
+          DepsList.size(), &NodeParamsStepFirst,
+          CommandBuffer->Device->getNativeContext()));
+
+      // Get sync point and register the cuNode with it.
+      *SyncPoint = CommandBuffer->addSyncPoint(
+          std::make_shared<CUgraphNode>(GraphNodeFirst));
+
+      DepsList.clear();
+      DepsList.push_back(GraphNodeFirst);
+
+      // we walk up the pattern in 1-byte steps, and call cuMemset for each
+      // 1-byte chunk of the pattern.
+      for (auto Step = 4u; Step < NumberOfSteps; ++Step) {
         // take 4 bytes of the pattern
-        auto Value = *(static_cast<const uint32_t *>(Pattern) + Step);
+        auto Value = *(static_cast<const uint8_t *>(Pattern) + Step);
 
         // offset the pointer to the part of the buffer we want to write to
-        auto OffsetPtr = DstPtr + (Step * sizeof(uint32_t));
+        auto OffsetPtr = DstPtr + (Step * sizeof(uint8_t));
 
         // Create a new node
         CUgraphNode GraphNode;
         // Update NodeParam
         CUDA_MEMSET_NODE_PARAMS NodeParamsStep = {};
         NodeParamsStep.dst = (CUdeviceptr)OffsetPtr;
-        NodeParamsStep.elementSize = 4;
-        NodeParamsStep.height = N;
-        NodeParamsStep.pitch = PatternSize;
+        NodeParamsStep.elementSize = sizeof(uint8_t);
+        NodeParamsStep.height = Size / NumberOfSteps;
+        NodeParamsStep.pitch = NumberOfSteps * sizeof(uint8_t);
         NodeParamsStep.value = Value;
         NodeParamsStep.width = 1;
 
         UR_CHECK_ERROR(cuGraphAddMemsetNode(
             &GraphNode, CommandBuffer->CudaGraph, DepsList.data(),
             DepsList.size(), &NodeParamsStep,
-            CommandBuffer->Device->getContext()));
+            CommandBuffer->Device->getNativeContext()));
 
+        GraphNodePtr = std::make_shared<CUgraphNode>(GraphNode);
         // Get sync point and register the cuNode with it.
-        *SyncPoint = CommandBuffer->addSyncPoint(
-            std::make_shared<CUgraphNode>(GraphNode));
+        *SyncPoint = CommandBuffer->addSyncPoint(GraphNodePtr);
+
+        DepsList.clear();
+        DepsList.push_back(*GraphNodePtr.get());
       }
     }
   } catch (ur_result_t Err) {
@@ -433,7 +479,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urCommandBufferAppendUSMMemcpyExp(
 
     UR_CHECK_ERROR(cuGraphAddMemcpyNode(
         &GraphNode, hCommandBuffer->CudaGraph, DepsList.data(), DepsList.size(),
-        &NodeParams, hCommandBuffer->Device->getContext()));
+        &NodeParams, hCommandBuffer->Device->getNativeContext()));
 
     // Get sync point and register the cuNode with it.
     *pSyncPoint =
@@ -468,8 +514,10 @@ UR_APIEXPORT ur_result_t UR_APICALL urCommandBufferAppendMemBufferCopyExp(
   }
 
   try {
-    auto Src = std::get<BufferMem>(hSrcMem->Mem).get() + srcOffset;
-    auto Dst = std::get<BufferMem>(hDstMem->Mem).get() + dstOffset;
+    auto Src = std::get<BufferMem>(hSrcMem->Mem)
+                   .getPtrWithOffset(hCommandBuffer->Device, srcOffset);
+    auto Dst = std::get<BufferMem>(hDstMem->Mem)
+                   .getPtrWithOffset(hCommandBuffer->Device, dstOffset);
 
     CUDA_MEMCPY3D NodeParams = {};
     setCopyParams(&Src, CU_MEMORYTYPE_DEVICE, &Dst, CU_MEMORYTYPE_DEVICE, size,
@@ -477,7 +525,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urCommandBufferAppendMemBufferCopyExp(
 
     UR_CHECK_ERROR(cuGraphAddMemcpyNode(
         &GraphNode, hCommandBuffer->CudaGraph, DepsList.data(), DepsList.size(),
-        &NodeParams, hCommandBuffer->Device->getContext()));
+        &NodeParams, hCommandBuffer->Device->getNativeContext()));
 
     // Get sync point and register the cuNode with it.
     *pSyncPoint =
@@ -508,8 +556,10 @@ UR_APIEXPORT ur_result_t UR_APICALL urCommandBufferAppendMemBufferCopyRectExp(
   }
 
   try {
-    CUdeviceptr SrcPtr = std::get<BufferMem>(hSrcMem->Mem).get();
-    CUdeviceptr DstPtr = std::get<BufferMem>(hDstMem->Mem).get();
+    auto SrcPtr =
+        std::get<BufferMem>(hSrcMem->Mem).getPtr(hCommandBuffer->Device);
+    auto DstPtr =
+        std::get<BufferMem>(hDstMem->Mem).getPtr(hCommandBuffer->Device);
     CUDA_MEMCPY3D NodeParams = {};
 
     setCopyRectParams(region, &SrcPtr, CU_MEMORYTYPE_DEVICE, srcOrigin,
@@ -518,7 +568,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urCommandBufferAppendMemBufferCopyRectExp(
 
     UR_CHECK_ERROR(cuGraphAddMemcpyNode(
         &GraphNode, hCommandBuffer->CudaGraph, DepsList.data(), DepsList.size(),
-        &NodeParams, hCommandBuffer->Device->getContext()));
+        &NodeParams, hCommandBuffer->Device->getNativeContext()));
 
     // Get sync point and register the cuNode with it.
     *pSyncPoint =
@@ -548,7 +598,8 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferWriteExp(
   }
 
   try {
-    auto Dst = std::get<BufferMem>(hBuffer->Mem).get() + offset;
+    auto Dst = std::get<BufferMem>(hBuffer->Mem)
+                   .getPtrWithOffset(hCommandBuffer->Device, offset);
 
     CUDA_MEMCPY3D NodeParams = {};
     setCopyParams(pSrc, CU_MEMORYTYPE_HOST, &Dst, CU_MEMORYTYPE_DEVICE, size,
@@ -556,7 +607,7 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferWriteExp(
 
     UR_CHECK_ERROR(cuGraphAddMemcpyNode(
         &GraphNode, hCommandBuffer->CudaGraph, DepsList.data(), DepsList.size(),
-        &NodeParams, hCommandBuffer->Device->getContext()));
+        &NodeParams, hCommandBuffer->Device->getNativeContext()));
 
     // Get sync point and register the cuNode with it.
     *pSyncPoint =
@@ -585,7 +636,8 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferReadExp(
   }
 
   try {
-    auto Src = std::get<BufferMem>(hBuffer->Mem).get() + offset;
+    auto Src = std::get<BufferMem>(hBuffer->Mem)
+                   .getPtrWithOffset(hCommandBuffer->Device, offset);
 
     CUDA_MEMCPY3D NodeParams = {};
     setCopyParams(&Src, CU_MEMORYTYPE_DEVICE, pDst, CU_MEMORYTYPE_HOST, size,
@@ -593,7 +645,7 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferReadExp(
 
     UR_CHECK_ERROR(cuGraphAddMemcpyNode(
         &GraphNode, hCommandBuffer->CudaGraph, DepsList.data(), DepsList.size(),
-        &NodeParams, hCommandBuffer->Device->getContext()));
+        &NodeParams, hCommandBuffer->Device->getNativeContext()));
 
     // Get sync point and register the cuNode with it.
     *pSyncPoint =
@@ -625,7 +677,8 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferWriteRectExp(
   }
 
   try {
-    CUdeviceptr DstPtr = std::get<BufferMem>(hBuffer->Mem).get();
+    auto DstPtr =
+        std::get<BufferMem>(hBuffer->Mem).getPtr(hCommandBuffer->Device);
     CUDA_MEMCPY3D NodeParams = {};
 
     setCopyRectParams(region, pSrc, CU_MEMORYTYPE_HOST, hostOffset,
@@ -635,7 +688,7 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferWriteRectExp(
 
     UR_CHECK_ERROR(cuGraphAddMemcpyNode(
         &GraphNode, hCommandBuffer->CudaGraph, DepsList.data(), DepsList.size(),
-        &NodeParams, hCommandBuffer->Device->getContext()));
+        &NodeParams, hCommandBuffer->Device->getNativeContext()));
 
     // Get sync point and register the cuNode with it.
     *pSyncPoint =
@@ -667,7 +720,8 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferReadRectExp(
   }
 
   try {
-    CUdeviceptr SrcPtr = std::get<BufferMem>(hBuffer->Mem).get();
+    auto SrcPtr =
+        std::get<BufferMem>(hBuffer->Mem).getPtr(hCommandBuffer->Device);
     CUDA_MEMCPY3D NodeParams = {};
 
     setCopyRectParams(region, &SrcPtr, CU_MEMORYTYPE_DEVICE, bufferOffset,
@@ -677,7 +731,7 @@ ur_result_t UR_APICALL urCommandBufferAppendMemBufferReadRectExp(
 
     UR_CHECK_ERROR(cuGraphAddMemcpyNode(
         &GraphNode, hCommandBuffer->CudaGraph, DepsList.data(), DepsList.size(),
-        &NodeParams, hCommandBuffer->Device->getContext()));
+        &NodeParams, hCommandBuffer->Device->getNativeContext()));
 
     // Get sync point and register the cuNode with it.
     *pSyncPoint =
@@ -776,7 +830,8 @@ UR_APIEXPORT ur_result_t UR_APICALL urCommandBufferAppendMemBufferFillExp(
                 PatternSizeIsValid,
             UR_RESULT_ERROR_INVALID_SIZE);
 
-  auto DstDevice = std::get<BufferMem>(hBuffer->Mem).get() + offset;
+  auto DstDevice = std::get<BufferMem>(hBuffer->Mem)
+                       .getPtrWithOffset(hCommandBuffer->Device, offset);
 
   return enqueueCommandBufferFillHelper(
       hCommandBuffer, &DstDevice, CU_MEMORYTYPE_DEVICE, pPattern, patternSize,
@@ -809,7 +864,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urCommandBufferEnqueueExp(
 
   try {
     std::unique_ptr<ur_event_handle_t_> RetImplEvent{nullptr};
-    ScopedContext Active(hQueue->getContext());
+    ScopedContext Active(hQueue->getDevice());
     uint32_t StreamToken;
     ur_stream_guard_ Guard;
     CUstream CuStream = hQueue->getNextComputeStream(
@@ -869,6 +924,29 @@ UR_APIEXPORT ur_result_t UR_APICALL urCommandBufferUpdateKernelLaunchExp(
     return UR_RESULT_ERROR_INVALID_OPERATION;
   }
 
+  if (auto NewWorkDim = pUpdateKernelLaunch->newWorkDim) {
+    // Error if work dim changes
+    if (NewWorkDim != hCommand->WorkDim) {
+      return UR_RESULT_ERROR_INVALID_OPERATION;
+    }
+
+    // Error If Local size and not global size
+    if ((pUpdateKernelLaunch->pNewLocalWorkSize != nullptr) &&
+        (pUpdateKernelLaunch->pNewGlobalWorkSize == nullptr)) {
+      return UR_RESULT_ERROR_INVALID_OPERATION;
+    }
+
+    // Error if local size non-nullptr and created with null
+    // or if local size nullptr and created with non-null
+    const bool IsNewLocalSizeNull =
+        pUpdateKernelLaunch->pNewLocalWorkSize == nullptr;
+    const bool IsOriginalLocalSizeNull = hCommand->isNullLocalSize();
+
+    if (IsNewLocalSizeNull ^ IsOriginalLocalSizeNull) {
+      return UR_RESULT_ERROR_INVALID_OPERATION;
+    }
+  }
+
   // Kernel corresponding to the command to update
   ur_kernel_handle_t Kernel = hCommand->Kernel;
 
@@ -904,7 +982,8 @@ UR_APIEXPORT ur_result_t UR_APICALL urCommandBufferUpdateKernelLaunchExp(
       if (ArgValue == nullptr) {
         Kernel->setKernelArg(ArgIndex, 0, nullptr);
       } else {
-        CUdeviceptr CuPtr = std::get<BufferMem>(ArgValue->Mem).get();
+        CUdeviceptr CuPtr =
+            std::get<BufferMem>(ArgValue->Mem).getPtr(CommandBuffer->Device);
         Kernel->setKernelArg(ArgIndex, sizeof(CUdeviceptr), (void *)&CuPtr);
       }
     } catch (ur_result_t Err) {
@@ -956,11 +1035,9 @@ UR_APIEXPORT ur_result_t UR_APICALL urCommandBufferUpdateKernelLaunchExp(
   size_t *GlobalWorkOffset = hCommand->GlobalWorkOffset;
   size_t *GlobalWorkSize = hCommand->GlobalWorkSize;
 
-  const bool ProvidedLocalSize = hCommand->LocalWorkSize[0] != 0 ||
-                                 hCommand->LocalWorkSize[1] != 0 ||
-                                 hCommand->LocalWorkSize[2] != 0;
   // If no worksize is provided make sure we pass nullptr to setKernelParams so
   // it can guess the local work size.
+  const bool ProvidedLocalSize = !hCommand->isNullLocalSize();
   size_t *LocalWorkSize = ProvidedLocalSize ? hCommand->LocalWorkSize : nullptr;
   uint32_t WorkDim = hCommand->WorkDim;
 

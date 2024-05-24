@@ -32,9 +32,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGet(ur_platform_handle_t hPlatform,
   if (NumEntries == 0) {
     /// Runtime queries number of devices
     if (phDevices != nullptr) {
-      if (PrintTrace) {
-        std::cerr << "Invalid Arguments for urDevicesGet\n";
-      }
+      logger::error("Invalid Arguments for urDevicesGet");
       return UR_RESULT_ERROR_INVALID_VALUE;
     }
     return UR_RESULT_SUCCESS;
@@ -100,7 +98,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGetInfo(ur_device_handle_t hDevice,
   case UR_DEVICE_INFO_LINKER_AVAILABLE:
     return ReturnValue(bool{false});
   case UR_DEVICE_INFO_MAX_COMPUTE_UNITS:
-    return ReturnValue(uint32_t{256});
+    return ReturnValue(static_cast<uint32_t>(hDevice->tp.num_threads()));
   case UR_DEVICE_INFO_PARTITION_MAX_SUB_DEVICES:
     return ReturnValue(uint32_t{0});
   case UR_DEVICE_INFO_SUPPORTED_PARTITIONS:
@@ -114,7 +112,8 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGetInfo(ur_device_handle_t hDevice,
     // '0x8086' : 'Intel HD graphics vendor ID'
     return ReturnValue(uint32_t{0x8086});
   case UR_DEVICE_INFO_MAX_WORK_GROUP_SIZE:
-    return ReturnValue(size_t{256});
+    // TODO: provide a mechanism to estimate/configure this.
+    return ReturnValue(size_t{2048});
   case UR_DEVICE_INFO_MEM_BASE_ADDR_ALIGN:
     // Imported from level_zero
     return ReturnValue(uint32_t{8});
@@ -140,7 +139,10 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGetInfo(ur_device_handle_t hDevice,
   case UR_DEVICE_INFO_MAX_WORK_ITEM_DIMENSIONS:
     return ReturnValue(uint32_t{3});
   case UR_DEVICE_INFO_PARTITION_TYPE:
-    return ReturnValue(ur_device_partition_property_t{});
+    if (pPropSizeRet) {
+      *pPropSizeRet = 0;
+    }
+    return UR_RESULT_SUCCESS;
   case UR_EXT_DEVICE_INFO_OPENCL_C_VERSION:
     return ReturnValue("");
   case UR_DEVICE_INFO_QUEUE_PROPERTIES:
@@ -150,7 +152,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGetInfo(ur_device_handle_t hDevice,
   case UR_DEVICE_INFO_MAX_WORK_ITEM_SIZES: {
     struct {
       size_t Arr[3];
-    } MaxGroupSize = {{256, 256, 1}};
+    } MaxGroupSize = {{256, 256, 256}};
     return ReturnValue(MaxGroupSize);
   }
   case UR_DEVICE_INFO_PREFERRED_VECTOR_WIDTH_CHAR:
@@ -160,15 +162,22 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGetInfo(ur_device_handle_t hDevice,
   case UR_DEVICE_INFO_PREFERRED_VECTOR_WIDTH_FLOAT:
   case UR_DEVICE_INFO_PREFERRED_VECTOR_WIDTH_DOUBLE:
   case UR_DEVICE_INFO_PREFERRED_VECTOR_WIDTH_HALF:
+  // TODO: How can we query vector width in a platform
+  // independent way?
   case UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_CHAR:
+    return ReturnValue(uint32_t{32});
   case UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_SHORT:
+    return ReturnValue(uint32_t{16});
   case UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_INT:
+    return ReturnValue(uint32_t{8});
   case UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_LONG:
+    return ReturnValue(uint32_t{4});
   case UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_FLOAT:
+    return ReturnValue(uint32_t{8});
   case UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_DOUBLE:
+    return ReturnValue(uint32_t{4});
   case UR_DEVICE_INFO_NATIVE_VECTOR_WIDTH_HALF:
-    return ReturnValue(uint32_t{1});
-
+    return ReturnValue(uint32_t{16});
   // Imported from level_zero
   case UR_DEVICE_INFO_USM_HOST_SUPPORT:
   case UR_DEVICE_INFO_USM_DEVICE_SUPPORT:
@@ -215,10 +224,10 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGetInfo(ur_device_handle_t hDevice,
     return ReturnValue(uint64_t{0});
   case UR_DEVICE_INFO_GLOBAL_MEM_SIZE:
     // TODO : CHECK
-    return ReturnValue(uint64_t{0});
+    return ReturnValue(uint64_t{32768});
   case UR_DEVICE_INFO_LOCAL_MEM_SIZE:
     // TODO : CHECK
-    return ReturnValue(uint64_t{0});
+    return ReturnValue(uint64_t{32768});
   case UR_DEVICE_INFO_MAX_CONSTANT_BUFFER_SIZE:
     // TODO : CHECK
     return ReturnValue(uint64_t{0});
@@ -258,7 +267,7 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGetInfo(ur_device_handle_t hDevice,
   case UR_DEVICE_INFO_BUILD_ON_SUBDEVICE:
     return ReturnValue(bool{0});
   case UR_DEVICE_INFO_ATOMIC_64:
-    return ReturnValue(bool{0});
+    return ReturnValue(bool{1});
   case UR_DEVICE_INFO_BFLOAT16:
     return ReturnValue(bool{0});
   case UR_DEVICE_INFO_MEM_CHANNEL_SUPPORT:
@@ -313,6 +322,8 @@ UR_APIEXPORT ur_result_t UR_APICALL urDeviceGetInfo(ur_device_handle_t hDevice,
   case UR_DEVICE_INFO_COMMAND_BUFFER_UPDATE_SUPPORT_EXP:
     return ReturnValue(false);
 
+  case UR_DEVICE_INFO_TIMESTAMP_RECORDING_SUPPORT_EXP:
+    return ReturnValue(false);
   default:
     DIE_NO_IMPLEMENTATION;
   }

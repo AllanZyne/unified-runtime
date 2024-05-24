@@ -176,6 +176,10 @@ struct ur_device_handle_t_ : _ur_object {
            (ZeDeviceProperties->deviceId & 0xff0) == 0xb60;
   }
 
+  bool isIntegrated() {
+    return (ZeDeviceProperties->flags & ZE_DEVICE_PROPERTY_FLAG_INTEGRATED);
+  }
+
   // Does this device represent a single compute slice?
   bool isCCS() const {
     return QueueGroup[ur_device_handle_t_::queue_group_info_t::Compute]
@@ -195,4 +199,6 @@ struct ur_device_handle_t_ : _ur_object {
   ZeCache<ZeStruct<ze_device_cache_properties_t>> ZeDeviceCacheProperties;
   ZeCache<ZeStruct<ze_device_ip_version_ext_t>> ZeDeviceIpVersionExt;
   ZeCache<struct ze_global_memsize> ZeGlobalMemSize;
+  ZeCache<ZeStruct<ze_mutable_command_list_exp_properties_t>>
+      ZeDeviceMutableCmdListsProperties;
 };

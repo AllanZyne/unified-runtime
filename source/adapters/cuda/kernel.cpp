@@ -19,7 +19,7 @@ urKernelCreate(ur_program_handle_t hProgram, const char *pKernelName,
   std::unique_ptr<ur_kernel_handle_t_> Kernel{nullptr};
 
   try {
-    ScopedContext Active(hProgram->getContext());
+    ScopedContext Active(hProgram->getDevice());
 
     CUfunction CuFunc;
     CUresult FunctionResult =
@@ -68,14 +68,6 @@ urKernelGetGroupInfo(ur_kernel_handle_t hKernel, ur_device_handle_t hDevice,
   case UR_KERNEL_GROUP_INFO_GLOBAL_WORK_SIZE: {
     size_t GlobalWorkSize[3] = {0, 0, 0};
 
-    int MaxBlockDimX{0}, MaxBlockDimY{0}, MaxBlockDimZ{0};
-    UR_CHECK_ERROR(cuDeviceGetAttribute(
-        &MaxBlockDimX, CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_X, hDevice->get()));
-    UR_CHECK_ERROR(cuDeviceGetAttribute(
-        &MaxBlockDimY, CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Y, hDevice->get()));
-    UR_CHECK_ERROR(cuDeviceGetAttribute(
-        &MaxBlockDimZ, CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Z, hDevice->get()));
-
     int MaxGridDimX{0}, MaxGridDimY{0}, MaxGridDimZ{0};
     UR_CHECK_ERROR(cuDeviceGetAttribute(
         &MaxGridDimX, CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X, hDevice->get()));
@@ -84,9 +76,10 @@ urKernelGetGroupInfo(ur_kernel_handle_t hKernel, ur_device_handle_t hDevice,
     UR_CHECK_ERROR(cuDeviceGetAttribute(
         &MaxGridDimZ, CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Z, hDevice->get()));
 
-    GlobalWorkSize[0] = MaxBlockDimX * MaxGridDimX;
-    GlobalWorkSize[1] = MaxBlockDimY * MaxGridDimY;
-    GlobalWorkSize[2] = MaxBlockDimZ * MaxGridDimZ;
+    GlobalWorkSize[0] = hDevice->getMaxWorkItemSizes(0) * MaxGridDimX;
+    GlobalWorkSize[1] = hDevice->getMaxWorkItemSizes(1) * MaxGridDimY;
+    GlobalWorkSize[2] = hDevice->getMaxWorkItemSizes(2) * MaxGridDimZ;
+
     return ReturnValue(GlobalWorkSize, 3);
   }
   case UR_KERNEL_GROUP_INFO_WORK_GROUP_SIZE: {
@@ -300,8 +293,6 @@ UR_APIEXPORT ur_result_t UR_APICALL
 urKernelSetArgMemObj(ur_kernel_handle_t hKernel, uint32_t argIndex,
                      const ur_kernel_arg_mem_obj_properties_t *Properties,
                      ur_mem_handle_t hArgValue) {
-  std::ignore = Properties;
-
   // Below sets kernel arg when zero-sized buffers are handled.
   // In such case the corresponding memory is null.
   if (hArgValue == nullptr) {
@@ -311,10 +302,14 @@ urKernelSetArgMemObj(ur_kernel_handle_t hKernel, uint32_t argIndex,
 
   ur_result_t Result = UR_RESULT_SUCCESS;
   try {
-    if (hArgValue->MemType == ur_mem_handle_t_::Type::Surface) {
+    auto Device = hKernel->getProgram()->getDevice();
+    ur_mem_flags_t MemAccess =
+        Properties ? Properties->memoryAccess : UR_MEM_FLAG_READ_WRITE;
+    hKernel->Args.addMemObjArg(argIndex, hArgValue, MemAccess);
+    if (hArgValue->isImage()) {
       CUDA_ARRAY3D_DESCRIPTOR arrayDesc;
       UR_CHECK_ERROR(cuArray3DGetDescriptor(
-          &arrayDesc, std::get<SurfaceMem>(hArgValue->Mem).getArray()));
+          &arrayDesc, std::get<SurfaceMem>(hArgValue->Mem).getArray(Device)));
       if (arrayDesc.Format != CU_AD_FORMAT_UNSIGNED_INT32 &&
           arrayDesc.Format != CU_AD_FORMAT_SIGNED_INT32 &&
           arrayDesc.Format != CU_AD_FORMAT_HALF &&
@@ -324,10 +319,11 @@ urKernelSetArgMemObj(ur_kernel_handle_t hKernel, uint32_t argIndex,
                         UR_RESULT_ERROR_ADAPTER_SPECIFIC);
         return UR_RESULT_ERROR_ADAPTER_SPECIFIC;
       }
-      CUsurfObject CuSurf = std::get<SurfaceMem>(hArgValue->Mem).getSurface();
+      CUsurfObject CuSurf =
+          std::get<SurfaceMem>(hArgValue->Mem).getSurface(Device);
       hKernel->setKernelArg(argIndex, sizeof(CuSurf), (void *)&CuSurf);
     } else {
-      CUdeviceptr CuPtr = std::get<BufferMem>(hArgValue->Mem).get();
+      CUdeviceptr CuPtr = std::get<BufferMem>(hArgValue->Mem).getPtr(Device);
       hKernel->setKernelArg(argIndex, sizeof(CUdeviceptr), (void *)&CuPtr);
     }
   } catch (ur_result_t Err) {
